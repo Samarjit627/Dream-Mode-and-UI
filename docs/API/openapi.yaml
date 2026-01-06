@@ -1,0 +1,71 @@
+openapi: 3.0.3
+info:
+  title: Axis5 Gateway API
+  version: 0.1.0
+servers:
+  - url: http://localhost:7071/api
+paths:
+  /health:
+    get:
+      responses:
+        '200': { description: OK }
+  /analyze/sketch:
+    get:
+      responses:
+        '200': { description: OK }
+    post:
+      responses:
+        '200': { description: OK }
+  /analyze/cad:
+    get:
+      responses:
+        '200': { description: OK }
+    post:
+      responses:
+        '200': { description: OK }
+  /ideate/generate4:
+    post:
+      responses:
+        '200': { description: 4 concepts }
+  /mentor/critique:
+    post:
+      responses:
+        '200': { description: critique }
+  /taste/packs:
+    get:
+      responses:
+        '200': { description: packs }
+  /knowledge/cards:
+    get:
+      parameters:
+        - in: query
+          name: track
+          schema: { type: string }
+      responses:
+        '200': { description: cards }
+  /upload:
+    post:
+      responses:
+        '200': { description: artifact id + preview url }
+  /exec/run:
+    post:
+      responses:
+        '200': { description: job id }
+  /exec/jobs/{id}:
+    get:
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: job state }
+  /exec/jobs/{id}/logs:
+    get:
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: SSE stream }

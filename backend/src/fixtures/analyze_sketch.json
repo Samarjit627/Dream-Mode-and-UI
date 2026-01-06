@@ -1,0 +1,7 @@
+{
+  "type": "sketch-analysis",
+  "insights": [
+    { "key": "symmetry", "value": "bilateral" },
+    { "key": "primary-shape", "value": "bottle-profile" }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axis5.local/schemas/KnowledgeCard.json",
+  "title": "KnowledgeCard",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "summary": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["id", "title"],
+  "additionalProperties": true
+}

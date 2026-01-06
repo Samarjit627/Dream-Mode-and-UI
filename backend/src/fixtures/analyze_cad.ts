@@ -1,0 +1,6 @@
+export default {
+  type: 'cad-analysis',
+  bbox_mm: { x: 65, y: 200, z: 65 },
+  volume_cc: 310,
+  features: ['revolve', 'fillet', 'shell'],
+}

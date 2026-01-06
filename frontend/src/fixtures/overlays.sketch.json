@@ -1,0 +1,8 @@
+{
+  "artifactType": "sketch",
+  "layers": [
+    { "type": "band_ratio", "params": { "top": 0.38, "bottom": 0.42 } },
+    { "type": "tangent_flags", "params": { "points": [[0.62, 0.21], [0.71, 0.35]] } },
+    { "type": "signifier_hotspots", "params": { "areas": [{ "x": 0.52, "y": 0.18, "r": 0.06 }] } }
+  ]
+}

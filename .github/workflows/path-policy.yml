@@ -1,0 +1,31 @@
+name: Path Policy
+
+on:
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  path-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install
+        working-directory: axis5
+        run: npm ci
+      - name: Lint path policy
+        working-directory: axis5
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PACKAGES_LAYOUT: true
+        run: |
+          git fetch --depth=1 origin "$BASE_REF" || true
+          FILES=$(git diff --name-only origin/$BASE_REF...HEAD || echo "")
+          if [ -z "$FILES" ]; then echo "No changed files"; exit 0; fi
+          FILES_CSV=$(echo "$FILES" | tr '\n' ',' | sed 's/,$//')
+          echo "Changed files: $FILES_CSV"
+          npx tsx scripts/path-lint.ts --files "$FILES_CSV"

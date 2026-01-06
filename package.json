@@ -1,0 +1,20 @@
+{
+  "name": "axis5-root",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm -C backend dev & pnpm -C frontend dev",
+    "dev:all": "pnpm -C backend dev & pnpm -C frontend dev",
+    "gen:ui": "tsx scripts/generators/gen-ui.ts",
+    "gen:api": "tsx scripts/generators/gen-api.ts",
+    "gen:schema": "tsx scripts/generators/gen-schema.ts",
+    "check:paths": "tsx scripts/path-lint.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.4",
+    "json-schema-to-typescript": "^15.0.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

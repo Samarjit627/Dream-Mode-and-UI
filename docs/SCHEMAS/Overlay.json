@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axis5.local/schemas/Overlay.json",
+  "title": "Overlay",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string" },
+    "label": { "type": "string" },
+    "points": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } }
+  },
+  "required": ["id", "label"],
+  "additionalProperties": true
+}

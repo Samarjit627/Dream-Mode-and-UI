@@ -1,0 +1,17 @@
+version: "3.8"
+services:
+  dream-poc:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: axis5-dream-poc:latest
+    container_name: axis5-dream-poc
+    ports:
+      - "8001:8000"
+    volumes:
+      - ../app/sample_data:/app/app/sample_data
+      - ../data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      # - SAM_WEIGHT_PATH=/app/weights/sam_vit_b_01ec64.pth   # optional
+    restart: unless-stopped

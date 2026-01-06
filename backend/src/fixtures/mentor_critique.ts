@@ -1,0 +1,6 @@
+export default {
+  critique: [
+    { aspect: 'ergonomics', note: 'Consider thumb indent for smaller hands' },
+    { aspect: 'manufacturing', note: 'Increase draft angle to 2° for blow molding' },
+  ],
+}

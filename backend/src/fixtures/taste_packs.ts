@@ -1,0 +1,7 @@
+export default {
+  packs: [
+    { id: 'modern', name: 'Modern Minimal' },
+    { id: 'sport', name: 'Sport Utility' },
+    { id: 'classic', name: 'Classic Heritage' },
+  ],
+}
