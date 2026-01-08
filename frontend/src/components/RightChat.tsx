@@ -27,6 +27,8 @@ type Props = {
     } | null
     dimensions?: Array<{ kind?: string; value?: number; unit?: string | null; prefix?: string | null; raw?: string }> | null
     objects?: Array<{ class?: string; confidence?: number; class_clip_guess?: string; clip_score?: number }> | null
+    imageUrl?: string | null
+    masterDescription?: string | null
   }
 }
 
@@ -49,6 +51,10 @@ export default function RightChat({ onAttach, context }: Props) {
 
   useEffect(() => {
     messagesRef.current = messages
+    // Auto-scroll on new message
+    if (listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight
+    }
   }, [messages])
 
   const canSend = useMemo(() => !!text.trim() && !sending, [text, sending])
@@ -114,7 +120,7 @@ export default function RightChat({ onAttach, context }: Props) {
           // clamp any existing page_text values
           for (const k of Object.keys(pageText)) {
             const v = String((pageText as any)[k] || '').replace(/\s+/g, ' ').trim()
-            ;(pageText as any)[k] = v.length > 12000 ? v.slice(0, 12000) : v
+              ; (pageText as any)[k] = v.length > 12000 ? v.slice(0, 12000) : v
           }
           return {
             image_metadata: (pv1 as any).image_metadata || null,
@@ -200,7 +206,16 @@ export default function RightChat({ onAttach, context }: Props) {
 
     let summary = ''
     const backendSummary = String(context?.judgement?.summary || '').trim()
-    if (backendSummary) {
+    const md = context?.masterDescription
+
+    if (md) {
+      // Parse Deep Read
+      const typeMatch = md.match(/TYPE:\s*(.+)/i)
+      const subjMatch = md.match(/SUBJECT:\s*(.+)/i)
+      const type = typeMatch ? typeMatch[1].trim() : 'Document'
+      const subj = subjMatch ? subjMatch[1].trim() : 'Unknown'
+      summary = `**High Fidelity ID**: ${subj} (${type})\n\n(Visual Deep Read Complete)`
+    } else if (backendSummary) {
       summary = backendSummary
     } else if (kind === 'business_card' || (hasContactFields && !kind)) {
       const lines: string[] = ['I can see you uploaded a visiting card. Here is the information I found:']
@@ -329,10 +344,11 @@ export default function RightChat({ onAttach, context }: Props) {
     context?.contacts,
     context?.dimensions,
     context?.objects,
+    context?.masterDescription,
   ])
 
   return (
-    <div className="border rounded-lg p-3 h-full flex flex-col" style={{background:'var(--panel)', borderColor:'var(--border)', color:'var(--text)'}}>
+    <div className="border rounded-lg p-3 h-full flex flex-col" style={{ background: 'var(--panel)', borderColor: 'var(--border)', color: 'var(--text)' }}>
       <div ref={listRef} className="flex-1 overflow-auto text-sm space-y-2">
         {messages.map((m) => (
           <div key={m.id} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
@@ -349,14 +365,14 @@ export default function RightChat({ onAttach, context }: Props) {
           </div>
         ))}
         {sending && (
-          <div className="text-xs" style={{color:'var(--muted)'}}>Thinking…</div>
+          <div className="text-xs" style={{ color: 'var(--muted)' }}>Thinking…</div>
         )}
       </div>
       <div className="mt-2 flex items-center gap-2">
         <button className="px-2 py-1 border rounded" onClick={() => setMenu(v => !v)} aria-label="Attach">📎</button>
         {menu && (
           <div className="relative">
-            <div className="absolute z-10 border rounded shadow p-2 flex gap-2" style={{background:'var(--panel-2)', borderColor:'var(--border)'}}>
+            <div className="absolute z-10 border rounded shadow p-2 flex gap-2" style={{ background: 'var(--panel-2)', borderColor: 'var(--border)' }}>
               <button className="px-2 py-1 border rounded text-xs" onClick={() => { onAttach('sketch'); setMenu(false) }}>Mock Sketch</button>
               <button className="px-2 py-1 border rounded text-xs" onClick={() => { onAttach('cad'); setMenu(false) }}>Mock CAD</button>
             </div>
@@ -373,7 +389,7 @@ export default function RightChat({ onAttach, context }: Props) {
             }
           }}
           placeholder="Message"
-          style={{background:'var(--panel-2)', borderColor:'var(--border)', color:'var(--text)'}}
+          style={{ background: 'var(--panel-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
           disabled={sending}
         />
         <button className="px-3 py-1 border rounded text-sm" onClick={send} disabled={!canSend}>

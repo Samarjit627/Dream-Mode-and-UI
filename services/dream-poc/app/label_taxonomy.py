@@ -208,10 +208,23 @@ def get_labels() -> List[str]:
         "sensor",
     ]
 
+    general_scenes = [
+        "nature", "landscape", "forest", "mountain", "beach", "ocean", "river", "desert", "sky",
+        "city", "urban", "street", "building", "skyscraper", "house", "architecture",
+        "indoors", "room", "office", "meeting room", "factory", "workshop", "laboratory",
+        "kitchen", "living room", "bedroom", "bathroom", "garage",
+        "space", "planet", "galaxy", "stars",
+        "art", "painting", "sketch", "drawing", "illustration", "anime", "cartoon", "cgi", "render",
+        "screenshot", "user interface", "text", "document", "chart", "diagram", "map",
+        "animal", "plant", "flower", "food", "meal", "drink",
+        "vehicle", "machine", "device", "furniture", "clothing",
+        "portrait", "face", "crowd", "people",
+    ]
+
     # De-dup while preserving order
     seen = set()
     out: List[str] = []
-    for lst in (coco, products, engineering_parts):
+    for lst in (coco, products, engineering_parts, general_scenes):
         for x in lst:
             k = x.strip().lower()
             if not k or k in seen:

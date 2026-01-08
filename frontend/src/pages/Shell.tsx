@@ -9,6 +9,10 @@ import BestNextStep from '../components/BestNextStep'
 import { uploadStep } from '../lib/api'
 import { exportDreamZip } from '../lib/export'
 import type { Detection, OcrWord } from '../lib/vision'
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Start Worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 export type Intent = {
   goal?: string
@@ -24,7 +28,7 @@ export default function Shell() {
   const navigate = useNavigate()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [intent, setIntent] = useState<Intent>({})
-  const [artifact, setArtifact] = useState<'none'|'sketch'|'cad'>('none')
+  const [artifact, setArtifact] = useState<'none' | 'sketch' | 'cad'>('none')
   const [glbUrl, setGlbUrl] = useState<string | null>(null)
   const [sketchUrl, setSketchUrl] = useState<string | null>(null)
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
@@ -51,6 +55,9 @@ export default function Shell() {
   const [chatObjects, setChatObjects] = useState<Array<{ class?: string; confidence?: number; class_clip_guess?: string; clip_score?: number }> | null>(null)
   const [boxes, setBoxes] = useState<Detection[] | null>(null)
   const [words, setWords] = useState<OcrWord[] | null>(null)
+  const [masterDescription, setMasterDescription] = useState<string | null>(null)
+  const [resolvedImageUrls, setResolvedImageUrls] = useState<string[] | null>(null)
+  const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null) // Legacy/Fallback
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -59,13 +66,16 @@ export default function Shell() {
       if (e.key === 'Escape') setDrawerOpen(false)
     }
     const onArtifact = (e: any) => {
-      const kind = e?.detail?.kind as 'sketch'|'cad'|'unknown'
+      const kind = e?.detail?.kind as 'sketch' | 'cad' | 'unknown'
       const file: File | undefined = e?.detail?.file
       if (kind === 'sketch' && file) {
         const url = URL.createObjectURL(file)
         setSketchUrl(url)
         setGlbUrl(null)
         setArtifact('sketch')
+        setMasterDescription(null)
+        setResolvedImageUrls(null)
+        setResolvedImageUrl(null)
       } else if ((kind === 'cad') && file) {
         const ext = (file.name.split('.').pop() || '').toLowerCase()
         if (ext === 'glb') {
@@ -98,10 +108,122 @@ export default function Shell() {
     else setDrawerOpen(true)
   }
 
+  // Visual Session Caching: Deep Read & Image Resolution
+  useEffect(() => {
+    if (!sketchUrl) return
+
+    const resolveImage = async () => {
+      // DEBUG TOAST
+      // window.dispatchEvent(new CustomEvent('axis5:toast', { detail: 'Debug: Starting Image Resolution...' }))
+      setResolvedImageUrls(null)
+      setResolvedImageUrl(null)
+      let resolved: string[] = []
+
+      // DEBUG: Check file type
+      const isPdf = sketchUrl.includes('.pdf') || (pdfUrl && sketchUrl === pdfUrl)
+
+      if (isPdf) {
+        console.log("Resolving PDF Pages...", sketchUrl)
+        try {
+          const loadingTask = pdfjsLib.getDocument(sketchUrl);
+          const pdf = await loadingTask.promise;
+          const totalPages = Math.min(pdf.numPages, 5); // Cap at 5 pages for cost/perf
+
+          for (let i = 1; i <= totalPages; i++) {
+            const page = await pdf.getPage(i);
+            const viewport = page.getViewport({ scale: 1.5 });
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            if (context) {
+              // @ts-ignore
+              await page.render({ canvasContext: context, viewport: viewport }).promise;
+              resolved.push(canvas.toDataURL('image/jpeg'));
+            }
+          }
+        } catch (e) {
+          console.error("PDF Render Error", e)
+          window.dispatchEvent(new CustomEvent('axis5:toast', { detail: 'Debug: PDF Render Failed' }))
+        }
+      } else if (sketchUrl.startsWith('blob:')) {
+        try {
+          const blob = await fetch(sketchUrl).then(r => r.blob())
+          // Double check mime type
+          if (blob.type === 'application/pdf') {
+            // Recursive call or duplicate logic?
+            // To be safe, let's treat it as generic image unless explicit.
+            // Actually, if blob is PDF, we should leverage the logic above.
+            // For now, assume generic image if not explicitly PDF extension/flag,
+            // but we can add blob-type checking if robust.
+          }
+
+          const url = await new Promise<string>((resolve) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(reader.result as string)
+            reader.readAsDataURL(blob)
+          })
+          resolved.push(url)
+        } catch (e) {
+          console.error("Failed to resolve blob", e)
+          window.dispatchEvent(new CustomEvent('axis5:toast', { detail: 'Debug: Blob Resolution Failed' }))
+        }
+      } else {
+        resolved.push(sketchUrl)
+      }
+
+      if (resolved.length > 0) {
+        // window.dispatchEvent(new CustomEvent('axis5:toast', { detail: `Debug: Resolved ${resolved.length} images` }))
+        setResolvedImageUrls(resolved)
+        setResolvedImageUrl(resolved[0] || null)
+      } else {
+        window.dispatchEvent(new CustomEvent('axis5:toast', { detail: 'Debug: No images resolved!' }))
+      }
+    }
+    resolveImage()
+  }, [sketchUrl, pdfUrl])
+
+  useEffect(() => {
+    if (!resolvedImageUrls || resolvedImageUrls.length === 0 || !perceptionV1 || masterDescription) return
+    const triggerDeepRead = async () => {
+      try {
+        console.log("Triggering Deep Read...", resolvedImageUrls.length, "pages")
+        const res = await fetch('/api/chat/describe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            context: {
+              imageUrls: resolvedImageUrls, // Send Array
+              perception_v1: perceptionV1,
+              ocrFullText: ocrFullText,
+              ocrSummary: ocrSummary,
+              engineeringUnderstanding,
+              understanding
+            }
+          })
+        })
+        if (res.ok) {
+          const j = await res.json()
+          if (j.description) {
+            setMasterDescription(j.description)
+            console.log("Deep Read Complete.")
+            window.dispatchEvent(new CustomEvent('axis5:toast', { detail: `Intelligence: Deep Read Complete (${resolvedImageUrls.length} pgs)` }))
+          }
+        }
+      } catch (e) {
+        console.error("Deep Read Failed", e)
+      }
+    }
+    // Increased delay for multi-page render
+    const t = setTimeout(triggerDeepRead, 3000)
+    return () => clearTimeout(t)
+  }, [resolvedImageUrls, perceptionV1, masterDescription, ocrFullText])
+
   const onDropFile = async (file: File) => {
     const ext = (file.name.split('.').pop() || '').toLowerCase()
     console.log('[upload] received', { name: file.name, ext })
-    if (['png','jpg','jpeg','webp'].includes(ext) || ext === 'pdf') {
+    if (['png', 'jpg', 'jpeg', 'webp'].includes(ext) || ext === 'pdf') {
       const url = URL.createObjectURL(file)
       if (ext === 'pdf') {
         setPdfUrl(url)
@@ -260,7 +382,9 @@ export default function Shell() {
           setEngineeringDom(out.text.engineering_drawing_dom)
         }
 
-        if (out?.engineering_drawing && typeof out.engineering_drawing === 'object') {
+        if (out?.engineering_understanding_object && typeof out.engineering_understanding_object === 'object') {
+          setEngineeringUnderstanding(out.engineering_understanding_object)
+        } else if (out?.engineering_drawing && typeof out.engineering_drawing === 'object') {
           setEngineeringDrawing(out.engineering_drawing)
           const euo = (out.engineering_drawing as any)?.engineering_understanding
           if (euo && typeof euo === 'object') setEngineeringUnderstanding(euo)
@@ -270,11 +394,15 @@ export default function Shell() {
         try {
           const kind = (out?.judgement && typeof out.judgement.kind === 'string') ? String(out.judgement.kind) : ''
           if (kind === 'engineering_drawing') {
-            const euo = (out?.engineering_drawing as any)?.engineering_understanding
-            if (euo && typeof euo === 'object') {
-              setUnderstanding({ kind: 'engineering_drawing', payload: euo })
+            if (out?.engineering_understanding_object) {
+              setUnderstanding({ kind: 'engineering_drawing', payload: out.engineering_understanding_object })
             } else {
-              setUnderstanding({ kind: 'engineering_drawing', payload: out?.engineering_drawing || null })
+              const euo = (out?.engineering_drawing as any)?.engineering_understanding
+              if (euo && typeof euo === 'object') {
+                setUnderstanding({ kind: 'engineering_drawing', payload: euo })
+              } else {
+                setUnderstanding({ kind: 'engineering_drawing', payload: out?.engineering_drawing || null })
+              }
             }
           } else if (kind && kind.includes('document')) {
             setUnderstanding({
@@ -284,6 +412,7 @@ export default function Shell() {
                 ocrSummary: out?.text?.summary || null,
                 ocrFullText: out?.text?.full_text || null,
                 contacts: out?.text?.extracted_fields?.contacts || null,
+                engineering_understanding_object: out?.engineering_understanding_object || (out?.engineering_drawing as any)?.engineering_understanding || null,
               },
             })
           } else {
@@ -294,6 +423,7 @@ export default function Shell() {
                 scene: out?.scene || null,
                 objects: out?.objects || null,
                 ocrSummary: out?.text?.summary || null,
+                engineering_understanding_object: out?.engineering_understanding_object || (out?.engineering_drawing as any)?.engineering_understanding || null,
               },
             })
           }
@@ -382,7 +512,7 @@ export default function Shell() {
       setViewerMessage('MTL loaded (materials will apply if matching OBJ)')
       return
     }
-    if (['step','stp'].includes(ext)) {
+    if (['step', 'stp'].includes(ext)) {
       try {
         const out = await uploadStep(file)
         if (out?.previewUrl) {
@@ -436,10 +566,10 @@ export default function Shell() {
   return (
     <div className="min-h-screen flex flex-col">
       <ToastHub />
-      <header className="border-b" style={{borderColor:'var(--border)'}}>
+      <header className="border-b" style={{ borderColor: 'var(--border)' }}>
         <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
           <nav className="flex gap-4 text-sm">
-            <NavLink to="/dream" className={({isActive}) => isActive ? 'font-semibold' : ''}>Dream</NavLink>
+            <NavLink to="/dream" className={({ isActive }) => isActive ? 'font-semibold' : ''}>Dream</NavLink>
             <button disabled className="opacity-50 cursor-not-allowed" title="Coming after Dream v1.0">Build</button>
             <button disabled className="opacity-50 cursor-not-allowed" title="Coming after Dream v1.0">Scale</button>
           </nav>
@@ -449,12 +579,12 @@ export default function Shell() {
             <ThemeToggle />
           </div>
         </div>
-        <div className="border-t" style={{borderColor:'var(--border)'}}>
+        <div className="border-t" style={{ borderColor: 'var(--border)' }}>
           <div className="mx-auto max-w-7xl px-4 py-2">
             <nav className="flex gap-3 text-xs">
-              <NavLink to="/dream/analyze" className={({isActive}) => isActive ? 'font-semibold underline' : ''}>Analyze</NavLink>
-              <NavLink to="/dream/mentor" className={({isActive}) => isActive ? 'font-semibold underline' : ''}>Mentor</NavLink>
-              <NavLink to="/dream/ideate" className={({isActive}) => isActive ? 'font-semibold underline' : ''}>Ideate</NavLink>
+              <NavLink to="/dream/analyze" className={({ isActive }) => isActive ? 'font-semibold underline' : ''}>Analyze</NavLink>
+              <NavLink to="/dream/mentor" className={({ isActive }) => isActive ? 'font-semibold underline' : ''}>Mentor</NavLink>
+              <NavLink to="/dream/ideate" className={({ isActive }) => isActive ? 'font-semibold underline' : ''}>Ideate</NavLink>
             </nav>
           </div>
         </div>
@@ -464,7 +594,7 @@ export default function Shell() {
 
       <div className="flex-1 w-full px-4 py-4 min-h-0">
         <div className="h-[calc(100vh-220px)] min-h-[520px] min-h-0 grid grid-cols-1 md:grid-cols-[70%_30%] gap-4">
-          <div className="h-full rounded-3xl border overflow-hidden" style={{background:'var(--panel)', borderColor:'var(--border)'}}>
+          <div className="h-full rounded-3xl border overflow-hidden" style={{ background: 'var(--panel)', borderColor: 'var(--border)' }}>
             <Viewer
               glbUrl={glbUrl}
               sketchUrl={sketchUrl}
@@ -482,9 +612,9 @@ export default function Shell() {
             />
           </div>
 
-          <div className="h-full rounded-3xl border overflow-hidden" style={{background:'var(--panel)', borderColor:'var(--border)'}}>
+          <div className="h-full rounded-3xl border overflow-hidden" style={{ background: 'var(--panel)', borderColor: 'var(--border)' }}>
             <RightChat
-              onAttach={(kind: 'sketch'|'cad') => setArtifact(kind)}
+              onAttach={(kind: 'sketch' | 'cad') => setArtifact(kind)}
               context={{
                 artifact,
                 understanding,
@@ -504,6 +634,8 @@ export default function Shell() {
                 contacts,
                 dimensions,
                 objects: chatObjects,
+                imageUrl: (resolvedImageUrls && resolvedImageUrls[0]) || sketchUrl,
+                masterDescription,
               }}
             />
           </div>

@@ -3,8 +3,10 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
 from .processing import process_upload_sync, process_upload_async
 from .models_loader import ModelRegistry
+from .perception_router import router as perception_router
 
 app = FastAPI(title="Axis5 Dream PoC")
+app.include_router(perception_router)
 models = ModelRegistry()
 
 @app.get("/health")

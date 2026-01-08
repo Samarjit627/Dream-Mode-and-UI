@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express'
 import { maybeProxyPost } from '../services/proxy.js'
+import { generateEngineeringResponse, generateMasterDescription, generateTextResponse } from '../services/chat_llm.js'
 
 const r = Router()
 
@@ -217,6 +218,10 @@ function buildUnifiedUnderstandingReport(body: ChatRequestBody): string {
   }
 
   if (kind === 'document') {
+    // For OCR/page questions, let the generic fallback handlers answer from OCR context.
+    if (intent === 'ocr') {
+      return ''
+    }
     const p = (payload && typeof payload === 'object') ? payload : {}
     const ocrText = String(p?.ocrFullText || p?.ocrSummary || '').trim()
     const contacts = (p?.contacts && typeof p.contacts === 'object') ? p.contacts : null
@@ -261,6 +266,10 @@ function buildUnifiedUnderstandingReport(body: ChatRequestBody): string {
   }
 
   if (kind === 'image') {
+    // For OCR/page questions, let the generic fallback handlers answer from OCR context.
+    if (intent === 'ocr') {
+      return ''
+    }
     const p = (payload && typeof payload === 'object') ? payload : {}
     const scene = p?.scene
     const objs = Array.isArray(p?.objects) ? p.objects : []
@@ -295,9 +304,19 @@ function buildUnifiedUnderstandingReport(body: ChatRequestBody): string {
     lines.push('')
     lines.push('- Tell me what you want: identify objects, read text, or extract key fields.')
     lines.push('')
-    lines.push('5) What is uncertain (if any)')
-    lines.push('')
     lines.push('Image understanding depends on detection confidence and OCR quality; ambiguous images may need user guidance.')
+
+    // Explicitly show Engineering Intelligence status if available
+    if (p?.engineering_understanding_object) {
+      const euo = p.engineering_understanding_object
+      const cls = String(euo?.document_classification?.document_type || 'UNKNOWN')
+      const conf = Number(euo?.confidence?.overall || 0)
+      lines.push('')
+      lines.push('6) Engineering Intelligence (EUO)')
+      lines.push('')
+      lines.push(`Applied analysis: ${cls} (Confidence: ${Math.round(conf * 100)}%)`)
+      if (conf < 0.75) lines.push('Note: Confidence too low to switch to Engineering Drawing mode.')
+    }
     return lines.join('\n')
   }
 
@@ -454,19 +473,41 @@ function buildEngineeringDrawingReport(body: ChatRequestBody): string {
   const ocrSummary = String(ctx?.ocrSummary || '').trim()
   const ocrText = ocrFull || ocrSummary
 
+  // Enhanced Engineering Understanding Object (EUO) support
+  const euo = (ctx?.engineeringUnderstanding && typeof ctx.engineeringUnderstanding === 'object') ? ctx.engineeringUnderstanding : null
+  const euoPart = (euo?.part_identity && typeof euo.part_identity === 'object') ? euo.part_identity : null
+  const euoIntent = (euo?.manufacturing_intent && typeof euo.manufacturing_intent === 'object') ? euo.manufacturing_intent : null
+  const euoGeom = (euo?.geometry_understanding && typeof euo.geometry_understanding === 'object') ? euo.geometry_understanding : null
+  const euoAnn = (euo?.annotation_understanding && typeof euo.annotation_understanding === 'object') ? euo.annotation_understanding : null
+  const euoConstraints = (euo?.constraints && typeof euo.constraints === 'object') ? euo.constraints : null
+
   const mdEvidence = (md && typeof md.evidence === 'object') ? (md as any).evidence : null
   const titleRaw = String(md?.part_name || md?.title || md?.fields?.title || '').trim()
   const titleEvConf = Number(mdEvidence?.part_name?.confidence ?? 0)
   const titleIsTrusted = titleEvConf >= 0.8
   const ocrTitle = (!titleIsTrusted || _looksLikeGarbageField(titleRaw)) ? _extractPartNameFromOcr(ocrText) : ''
-  const title = (titleIsTrusted && !_looksLikeGarbageField(titleRaw)) ? titleRaw : ocrTitle
+  let title = (titleIsTrusted && !_looksLikeGarbageField(titleRaw)) ? titleRaw : ocrTitle
+
+  // Prefer EUO Part Name if available and valid
+  const euoName = String(euoPart?.name || '').trim()
+  if (euoName && euoName !== 'UNSPECIFIED PART' && euoName !== 'UNKNOWN') {
+    title = euoName
+  }
+
   const drawingNo = String(md?.part_number || md?.drawing_no || md?.fields?.drawing_no || '').trim()
   const ref = String(md?.reference_drawing || md?.fields?.reference_drawing || md?.fields?.ref_dwg || '').trim()
   const materialRaw = String(md?.material || md?.fields?.material || '').trim()
   const materialEvConf = Number(mdEvidence?.material?.confidence ?? 0)
   const materialIsTrusted = materialEvConf >= 0.8
   const materialLooksOk = /\b(rubber|spc\d{2,4}|pp|pe|abs|pc|pa\d{1,2}|tpu|epdm|silicone|nbr)\b/i.test(materialRaw)
-  const material = (materialIsTrusted || materialLooksOk) && !_looksLikeGarbageField(materialRaw) ? materialRaw : ''
+  let material = (materialIsTrusted || materialLooksOk) && !_looksLikeGarbageField(materialRaw) ? materialRaw : ''
+
+  // Prefer EUO Material if available
+  const euoMat = String(euoIntent?.material_class || '').trim()
+  if (euoMat && euoMat !== 'UNKNOWN') {
+    material = euoMat
+  }
+
   const scale = String(md?.scale || md?.fields?.scale || '').trim()
   const rev = String(md?.revision || md?.fields?.revision || md?.fields?.rev || '').trim()
   const units = String(md?.units || '').trim()
@@ -510,16 +551,28 @@ function buildEngineeringDrawingReport(body: ChatRequestBody): string {
   const globalConf = (typeof conf?.global === 'number') ? conf.global : null
   const borderConf = (typeof conf?.sheet === 'number') ? conf.sheet : (typeof conf?.border === 'number' ? conf.border : null)
 
+  // Use EUO confidence if available
+  const euoConf = (typeof euo?.confidence?.overall === 'number') ? euo.confidence.overall : null
+
   const lines: string[] = []
   lines.push('1. What is this document?')
   lines.push('')
-  lines.push('This appears to be a manufacturing technical drawing (engineering drawing).')
-  if (judgement?.summary) {
+  if (euo?.document_classification?.document_type) {
+    lines.push(`Document Classification: ${euo.document_classification.document_type}`)
+  } else {
+    lines.push('This appears to be a manufacturing technical drawing (engineering drawing).')
+  }
+
+  if (judgement?.summary && !euo) {
     lines.push('')
     lines.push('Evidence (system judgement):')
     lines.push(String(judgement.summary).trim())
   }
-  if (borderConf !== null || globalConf !== null) {
+
+  if (euoConf !== null) {
+    lines.push('')
+    lines.push(`Confidence (EUO): ${Number(euoConf).toFixed(2)}`)
+  } else if (borderConf !== null || globalConf !== null) {
     const bits: string[] = []
     if (globalConf !== null) bits.push(`global_conf=${Number(globalConf).toFixed(2)}`)
     if (borderConf !== null) bits.push(`border_conf=${Number(borderConf).toFixed(2)}`)
@@ -535,13 +588,15 @@ function buildEngineeringDrawingReport(body: ChatRequestBody): string {
   if (title) {
     lines.push(`Part name/title: ${title}`)
   } else {
-    lines.push("I couldn't confidently extract a part name/title from the title block yet.")
+    lines.push("I couldn't confidently extract a part name/title yet.")
   }
   if (drawingNo) lines.push(`Part/Drawing number: ${drawingNo}`)
   if (ref) lines.push(`Reference drawing: ${ref}`)
   if (scale) lines.push(`Scale: ${scale}`)
   if (rev) lines.push(`Revision: ${rev}`)
   if (units) lines.push(`Units: ${units}`)
+
+  if (euoPart?.classification) lines.push(`Classification: ${euoPart.classification}`)
 
   if (ii?.part_family || ii?.use_case) {
     lines.push('')
@@ -551,30 +606,50 @@ function buildEngineeringDrawingReport(body: ChatRequestBody): string {
   }
 
   lines.push('')
-  lines.push('3. What material is specified?')
+  lines.push('3. What material / process?')
   lines.push('')
   if (material) {
     lines.push(`Material: ${material}`)
   } else {
-    lines.push('Material: not confidently parsed from title block.')
-    if (materialHintLines.length) {
-      lines.push('Material-related OCR hints:')
-      for (const h of materialHintLines) lines.push(`- ${h}`)
-    }
+    lines.push('Material: not confidently parsed.')
   }
-  if (ii?.material_class) {
+
+  if (euoIntent?.likely_process && euoIntent.likely_process !== 'UNKNOWN') {
+    lines.push(`Likely Process: ${euoIntent.likely_process}`)
+  }
+
+  if (euoIntent?.production_scale && euoIntent.production_scale !== 'UNKNOWN') {
+    lines.push(`Production Scale: ${euoIntent.production_scale}`)
+  }
+
+  if (ii?.material_class && !euoIntent) {
     lines.push(`Material class (inferred): ${String(ii.material_class)}`)
   }
 
   lines.push('')
-  lines.push('4. What views are shown?')
+  lines.push('4. Geometry & Structure')
   lines.push('')
+
+  if (euoGeom) {
+    if (euoGeom.primary_form && euoGeom.primary_form !== 'UNKNOWN') lines.push(`Primary Form: ${euoGeom.primary_form}`)
+    if (euoGeom.dimensional_complexity) lines.push(`Complexity: ${euoGeom.dimensional_complexity}`)
+    if (euoGeom.key_features && euoGeom.key_features.length) lines.push(`Key Features: ${euoGeom.key_features.join(', ')}`)
+  }
+
   const viewCount = Array.isArray(views) ? views.length : 0
   const domViewCount = Array.isArray(domViews) ? domViews.length : 0
-  const regionHint = regionTypes.length ? `Regions: ${regionTypes.join(', ')}` : ''
-  const viewHint = viewTypes.length ? `View types (detected labels): ${viewTypes.join(', ')}` : ''
-  const counts = [`views=${viewCount}`, `dom_views=${domViewCount}`].join(', ')
-  lines.push(`Detected structure: ${counts}${regionHint ? `; ${regionHint}` : ''}${viewHint ? `; ${viewHint}` : ''}`)
+  if (viewCount > 0 || domViewCount > 0) {
+    const counts = [`views=${viewCount}`, `dom_views=${domViewCount}`].join(', ')
+    lines.push(`Detected Views: ${counts}`)
+  }
+
+  // Legacy view hints only if no EUO geometry info
+  if (!euoGeom) {
+    const regionHint = regionTypes.length ? `Regions: ${regionTypes.join(', ')}` : ''
+    const viewHint = viewTypes.length ? `View types (detected labels): ${viewTypes.join(', ')}` : ''
+    if (regionHint || viewHint) lines.push(`Structure Hints: ${regionHint}; ${viewHint}`)
+  }
+
 
   lines.push('')
   lines.push('5. What dimensions are written?')
@@ -621,12 +696,15 @@ function classifyIntent(msgRaw: string): GroundedIntent {
   const asksOcr =
     lower.includes("what's written") ||
     lower.includes('whats written') ||
+    lower.includes('what written') ||  // typo variant
     lower.includes('what is written') ||
     lower.includes('read the text') ||
     lower.includes('read text') ||
     lower.includes('what does it say') ||
     lower.includes('extract text') ||
-    lower.includes('ocr')
+    lower.includes('ocr') ||
+    /\b(written|text)\s*(on|in)?\s*page\s*\d+/i.test(lower) ||  // "written on page 3", "text on page 5"
+    /\bpage\s*\d+\s*(text|written|content)/i.test(lower)  // "page 3 text", "page 5 content"
   if (asksOcr) return 'ocr'
 
   const asksContact =
@@ -648,7 +726,41 @@ function classifyIntent(msgRaw: string): GroundedIntent {
   return 'unknown'
 }
 
-function fallbackReply(body: ChatRequestBody): string {
+function _attemptNaiveQA(query: string, ocrText: string): string | null {
+  if (!query || !ocrText || query.length < 4) return null
+  const qObj = query.toLowerCase().replace(/[^a-z0-9 ]/g, '')
+  const stopWords = ['what', 'where', 'when', 'show', 'tell', 'find', 'is', 'the', 'a', 'an', 'in', 'on', 'of', 'for', 'to', 'this']
+  const keywords = qObj.split(' ').filter(w => w.length > 3 && !stopWords.includes(w))
+  if (keywords.length === 0) return null
+
+  const lines = ocrText.replace(/\r/g, '\n').split('\n').filter(l => l.trim().length > 5)
+  let bestLine = ''
+  let maxScore = 0
+
+  for (const line of lines) {
+    const lLow = line.toLowerCase()
+    let score = 0
+    let matchCount = 0
+    for (const k of keywords) {
+      if (lLow.includes(k)) {
+        score += 1
+        matchCount++
+      }
+    }
+    // Boost check: if line contains "Answer:" or "Title:" or similar structure relative to query? 
+    // Keep it simple: Term frequency
+    if (score > maxScore) {
+      maxScore = score
+      bestLine = line
+    }
+  }
+
+  // Threshold: at least one keyword match
+  if (maxScore > 0) return bestLine.trim()
+  return null
+}
+
+async function fallbackReply(body: ChatRequestBody): Promise<string> {
   const msg = String(body?.message || body?.messages?.slice(-1)?.[0]?.content || '').trim()
   if (!msg) return 'Send a message and I will reply here.'
 
@@ -674,6 +786,47 @@ function fallbackReply(body: ChatRequestBody): string {
   const understanding = (body?.context?.understanding && typeof body.context.understanding === 'object')
     ? body.context.understanding
     : null
+
+  // Senior Engineering Chat Integration
+
+  // OPTIMIZATION: Visual Session Caching
+  if (body?.context?.masterDescription) {
+    console.log('[FAST CHAT] Using Cached Description:', body.context.masterDescription.slice(0, 100) + '...')
+    const fastReply = await generateTextResponse(body.context.masterDescription, msg)
+    console.log('[FAST CHAT] Reply:', fastReply)
+    if (fastReply) return fastReply
+  } else {
+    console.log('[FAST CHAT] No Master Description found in context.')
+  }
+
+  if (understanding) {
+    const imageUrl = (body?.context?.imageUrl && typeof body.context.imageUrl === 'string') ? body.context.imageUrl : undefined
+    const engineered = await generateEngineeringResponse({
+      ...understanding,
+      // Inject supplementary context for the engineer
+      text_content: ocrFull || ocrSummary || undefined,
+      scene_data: body?.context?.scene || undefined,
+      detected_objects: body?.context?.objects || undefined
+    }, msg, imageUrl, ocrText)
+    if (engineered) return engineered
+  }
+
+  // Auto-QA: Try to answer question from full text content
+  let fullSearchText = ocrText
+  if (ocrPages && Array.isArray(ocrPages)) {
+    fullSearchText = ocrPages.map((p: any) => String(p.text || '')).join('\n')
+  }
+
+  // Relaxed QA trigger: allow questions without ? if they start with W-words
+  const isQuestion = msg.includes('?') || /^(who|what|where|when|how|why|which)\b/i.test(msg)
+  if (isQuestion && msg.length > 6) {
+    // Exclude specific intents that are handled below
+    const isSpecific = /\b(scale|material|finish|rev|sheet|drawing|title|date|drawn|view|dim|tol|object|ocr|written)\b/i.test(msg)
+    if (!isSpecific) {
+      const qa = _attemptNaiveQA(msg, fullSearchText)
+      if (qa) return `Best answer found in document:\n> "${qa}"`
+    }
+  }
 
   const asksScale = /\bscale\b/i.test(msg)
   const asksMaterial = /\bmaterial\b/i.test(msg)
@@ -721,7 +874,8 @@ function fallbackReply(body: ChatRequestBody): string {
   const intent = classifyIntent(msg)
 
   // Unified understanding is the sole truth layer when present.
-  if (understanding) {
+  // Unified understanding is the sole truth layer when present.
+  if (understanding && (asksSummary || asksWhatIsThis || intent === 'summary')) {
     const out = buildUnifiedUnderstandingReport(body)
     if (out) return out
   }
@@ -855,25 +1009,38 @@ function fallbackReply(body: ChatRequestBody): string {
   }
 
   const asksObjects = /\b(objects|object|items|things|what\s+is\s+in\s+this|detect|detections|identify)\b/i.test(lower)
-  if (asksObjects && objs && objs.length) {
-    const lines = objs.slice(0, 12).map((o: any) => {
-      const nm = String(o?.class || o?.class_clip_guess || '').trim() || 'object'
-      const conf = (typeof o?.confidence === 'number') ? o.confidence : (typeof o?.clip_score === 'number' ? o.clip_score : null)
-      const pct = (typeof conf === 'number') ? ` (${Math.round(conf * 100)}%)` : ''
-      return `- ${nm}${pct}`
-    })
-    return `Objects/visual hints:\n${lines.join('\n')}`
+  if (asksObjects) {
+    if (objs && objs.length) {
+      const lines = objs.slice(0, 12).map((o: any) => {
+        const nm = String(o?.class || o?.class_clip_guess || '').trim() || 'object'
+        const conf = (typeof o?.confidence === 'number') ? o.confidence : (typeof o?.clip_score === 'number' ? o.clip_score : null)
+        const pct = (typeof conf === 'number') ? ` (${Math.round(conf * 100)}%)` : ''
+        return `- ${nm}${pct}`
+      })
+      return `Objects/visual hints:\n${lines.join('\n')}`
+    }
+    // Fallback to scene
+    const scene = body?.context?.scene || body?.context?.understanding?.payload?.scene
+    if (scene && (scene.top_label || scene.label)) {
+      const lbl = String(scene.top_label || scene.label)
+      const score = scene.top_score || scene.score || 0
+      return `I didn't detect specific objects, but the scene looks like: ${lbl} (${Math.round(score * 100)}%)`
+    }
+    return "I couldn't identify specific objects in this image."
   }
 
   const asksOcr =
     lower.includes("what's written") ||
     lower.includes('whats written') ||
+    lower.includes('what written') ||  // typo variant
     lower.includes('what is written') ||
     lower.includes('read the text') ||
     lower.includes('read text') ||
     lower.includes('what does it say') ||
     lower.includes('extract text') ||
-    lower.includes('ocr')
+    lower.includes('ocr') ||
+    /\b(written|text)\s*(on|in)?\s*page\s*\d+/i.test(lower) ||
+    /\bpage\s*\d+\s*(text|written|content)/i.test(lower)
 
   if (asksOcr) {
     const pageNum = parseInt(msg.match(/\bpage\s*(\d+)\b/i)?.[1] || '1', 10)
@@ -1025,7 +1192,8 @@ function fallbackReply(body: ChatRequestBody): string {
     return "I can help analyze what you uploaded. What are you trying to achieve?"
   }
 
-  return `Got it: ${msg}\n\nNext, tell me whether you want analysis, ideation, or design feedback.`
+  // Final fallback for unknown intent in local mode
+  return `I'm sorry, I couldn't find a specific answer to your question in the document. (Running in Rule-Based Mode)\n\nTry asking for: 'summary', 'text', 'identify objects', or specific engineering fields.`
 }
 
 r.post('/chat', async (req: Request, res: Response, next: NextFunction) => {
@@ -1069,7 +1237,7 @@ r.post('/chat', async (req: Request, res: Response, next: NextFunction) => {
       if (grounded || preferLocal) {
         return res.json({
           id: `local_grounded_${Date.now()}`,
-          reply: fallbackReply(body),
+          reply: await fallbackReply(body),
           model: 'local-grounded',
         })
       }
@@ -1087,8 +1255,36 @@ r.post('/chat', async (req: Request, res: Response, next: NextFunction) => {
 
     return res.json({
       id: `local_${Date.now()}`,
-      reply: fallbackReply(body),
+      reply: await fallbackReply(body),
       model: 'local-fallback',
+    })
+  } catch (e) {
+    next(e)
+  }
+})
+
+r.post('/chat/describe', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = (req.body || {}) as ChatRequestBody
+    const euo = body?.context?.understanding?.payload || body?.context?.engineeringUnderstanding || null
+    const ocrText = body?.context?.ocrFullText || body?.context?.ocrSummary || undefined
+
+    // Support single or multiple images
+    const singleUrl = (body?.context?.imageUrl && typeof body.context.imageUrl === 'string') ? body.context.imageUrl : undefined
+    const multiUrls = (body?.context?.imageUrls && Array.isArray(body.context.imageUrls)) ? body.context.imageUrls : undefined
+    const finalImages = multiUrls || (singleUrl ? [singleUrl] : undefined)
+
+    if (!finalImages || finalImages.length === 0) {
+      return res.json({ id: `desc_err_${Date.now()}`, description: null, error: "No image URL provided." })
+    }
+
+    console.log("[DEEP READ] Generating description for:", finalImages.length, "images")
+    const description = await generateMasterDescription(euo, finalImages, ocrText)
+    console.log("[DEEP READ] Result:", description.slice(0, 100) + '...')
+    return res.json({
+      id: `desc_${Date.now()}`,
+      description,
+      model: 'gpt-4o-vision'
     })
   } catch (e) {
     next(e)

@@ -94,6 +94,81 @@ def _bbox_norm_from_px(x1: float, y1: float, x2: float, y2: float, w: float, h: 
         return [0.0, 0.0, 0.0, 0.0]
 
 
+def _classify_shape(contour, approx) -> Dict[str, Any]:
+    """Classify a detected shape based on geometric properties."""
+    try:
+        import cv2
+        import numpy as np
+        
+        vertices = len(approx)
+        area = cv2.contourArea(contour)
+        perimeter = cv2.arcLength(contour, True)
+        
+        if vertices == 3:
+            return {"type": "triangle", "confidence": 0.9, "vertices": 3}
+        
+        elif vertices == 4:
+            # Check if rectangle or square
+            x, y, w, h = cv2.boundingRect(approx)
+            aspect_ratio = float(w) / float(h) if h > 0 else 1.0
+            
+            if 0.95 <= aspect_ratio <= 1.05:
+                return {"type": "square", "confidence": 0.85, "vertices": 4, "aspect_ratio": round(aspect_ratio, 2)}
+            else:
+                return {"type": "rectangle", "confidence": 0.85, "vertices": 4, "aspect_ratio": round(aspect_ratio, 2)}
+        
+        elif vertices > 4:
+            # Check circularity for circle/ellipse detection
+            circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
+            
+            if circularity > 0.85:
+                # Fit ellipse to check if it's a circle
+                if len(contour) >= 5:
+                    try:
+                        ellipse = cv2.fitEllipse(contour)
+                        (center, axes, angle) = ellipse
+                        major_axis = max(axes)
+                        minor_axis = min(axes)
+                        eccentricity = minor_axis / major_axis if major_axis > 0 else 0
+                        
+                        if eccentricity > 0.9:
+                            return {"type": "circle", "confidence": 0.9, "circularity": round(circularity, 2)}
+                        else:
+                            return {"type": "ellipse", "confidence": 0.85, "circularity": round(circularity, 2), "eccentricity": round(eccentricity, 2)}
+                    except:
+                        pass
+            
+            return {"type": "polygon", "confidence": 0.7, "vertices": vertices}
+        
+        return {"type": "unknown", "confidence": 0.3, "vertices": vertices}
+    except Exception:
+        return {"type": "unknown", "confidence": 0.0}
+
+
+def _classify_line(x1, y1, x2, y2, threshold_deg=5) -> Dict[str, Any]:
+    """Classify a line as horizontal, vertical, or diagonal."""
+    try:
+        import math
+        
+        dx = x2 - x1
+        dy = y2 - y1
+        
+        if abs(dx) < 1e-6:
+            return {"type": "vertical", "angle_deg": 90.0}
+        
+        angle_rad = math.atan2(dy, dx)
+        angle_deg = abs(math.degrees(angle_rad))
+        
+        if angle_deg <= threshold_deg or angle_deg >= (180 - threshold_deg):
+            return {"type": "horizontal", "angle_deg": 0.0}
+        elif abs(angle_deg - 90) <= threshold_deg:
+            return {"type": "vertical", "angle_deg": 90.0}
+        else:
+            return {"type": "diagonal", "angle_deg": round(angle_deg, 1)}
+    except Exception:
+        return {"type": "unknown", "angle_deg": 0.0}
+
+
 def _perception_opencv_geometry(rgb_arr, page_idx: int) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "lines": [],
@@ -117,11 +192,17 @@ def _perception_opencv_geometry(rgb_arr, page_idx: int) -> Dict[str, Any]:
             for ln in lines[:800]:
                 x1, y1, x2, y2 = [float(v) for v in ln[0]]
                 length = float(math.hypot(x2 - x1, y2 - y1))
+                
+                # Classify line type
+                line_class = _classify_line(x1, y1, x2, y2)
+                
                 line_items.append({
                     "page": int(page_idx),
                     "start": [x1, y1],
                     "end": [x2, y2],
                     "length": length,
+                    "line_type": line_class["type"],
+                    "angle_deg": line_class["angle_deg"],
                 })
         out["lines"] = line_items
 
@@ -138,10 +219,17 @@ def _perception_opencv_geometry(rgb_arr, page_idx: int) -> Dict[str, Any]:
             approx = cv2.approxPolyDP(c, 0.02 * peri, True)
             if len(approx) < 3:
                 continue
+            
+            # Classify shape type
+            classification = _classify_shape(c, approx)
+            
             closed_shapes.append({
                 "page": int(page_idx),
                 "contour_id": f"c{page_idx}_{i}",
                 "area": float(area),
+                "shape_type": classification["type"],
+                "shape_confidence": classification["confidence"],
+                "vertices": classification.get("vertices", 0),
             })
         out["closed_shapes"] = closed_shapes
 
@@ -172,10 +260,64 @@ def _perception_opencv_geometry(rgb_arr, page_idx: int) -> Dict[str, Any]:
                 })
         out["arrow_candidates"] = arrow_candidates
 
+        # --- Symbol Detection (Surface Finish, GD&T, Datum) ---
+        symbols: List[Dict[str, Any]] = []
+        for i, c in enumerate(cnts[:800]):
+            area = float(cv2.contourArea(c))
+            if area < 50.0: continue
+            
+            peri = float(cv2.arcLength(c, True))
+            if peri <= 0: continue
+            approx = cv2.approxPolyDP(c, 0.03 * peri, True)
+            vertices = len(approx)
+            
+            x, y, bw, bh = cv2.boundingRect(approx)
+            aspect = float(bw) / float(bh) if bh > 0 else 1.0
+            
+            # 1. Surface Finish (Triangle / Checkmark)
+            # Triangles (3 vertices) or "V" shapes (approx can be 3-5 depending on closure)
+            if 3 <= vertices <= 4 and area < 1500:
+                # Check orientation: Surface finish usually points down (y+).
+                # Rough heuristic: bounding box is roughly square or tall
+                if 0.5 < aspect < 2.0:
+                    symbols.append({
+                        "type": "SURFACE_FINISH", 
+                        "confidence": 0.7, 
+                        "bbox_norm": _bbox_norm_from_px(float(x), float(y), float(x+bw), float(y+bh), float(w), float(h))
+                    })
+                    continue
+
+            # 2. GD&T Feature Control Frame (Long Rectangle)
+            if vertices == 4 and aspect > 2.5 and area > 200:
+                # Check for probable internal vertical dividers (not expensive to do fully, can skip for heuristic)
+                symbols.append({
+                    "type": "GDT_FRAME",
+                    "confidence": 0.6,
+                    "bbox_norm": _bbox_norm_from_px(float(x), float(y), float(x+bw), float(y+bh), float(w), float(h))
+                })
+                continue
+                
+            # 3. Datum Target (Circle with line attached - simplified to just Circle)
+            # Detecting "line attached" is hard without full graph. We just detect the Datum Circle.
+            if vertices > 6:
+                circularity = 4 * np.pi * area / (peri * peri)
+                if circularity > 0.8:
+                    # Datum targets usually have a horizontal divider line.
+                    # We can't see internal line in contour, but we can guess by context (usually near edges).
+                    # For now just mark as candidate.
+                    symbols.append({
+                        "type": "DATUM_TARGET",
+                        "confidence": 0.5,
+                        "bbox_norm": _bbox_norm_from_px(float(x), float(y), float(x+bw), float(y+bh), float(w), float(h))
+                    })
+                    
+        out["symbols"] = symbols
+
         out["_metrics"] = {
             "line_count": int(len(line_items)),
             "closed_shape_count": int(len(closed_shapes)),
             "arrow_count": int(len(arrow_candidates)),
+            "symbol_count": int(len(symbols)),
             "closed_loop_line_ratio": float(min(1.0, len(closed_shapes) / float(max(1, len(line_items))))),
         }
         return out
@@ -196,8 +338,27 @@ def _perception_regions_from_signals(page_idx: int, w_px: int, h_px: int, text_b
             if isinstance(bn, list) and len(bn) == 4:
                 tb.append([float(bn[0]), float(bn[1]), float(bn[2]), float(bn[3])])
 
-        # Candidate title block: dense text in bottom band
-        bottom_blocks = [bb for bb in tb if (bb[1] + bb[3] * 0.5) >= 0.72]
+        # Candidate title block: Look for dense text in ANY corner or bottom band.
+        # Heuristic: Title Blocks are usually bounded and dense.
+        # We prefer Bottom-Right > Bottom-Left > Top-Right > Top-Left
+        
+        # 1. Broad candidate: Bottom 25% of page
+        bottom_region_blocks = [bb for bb in tb if (bb[1] + bb[3] * 0.5) >= 0.75]
+        
+        # 2. Refined candidate: Split into corners
+        br_blocks = [b for b in bottom_region_blocks if (b[0] + b[2]*0.5) >= 0.5]
+        bl_blocks = [b for b in bottom_region_blocks if (b[0] + b[2]*0.5) < 0.5]
+        
+        # Select best candidate cluster
+        # If BR has meaningful content, prefer it. Else BL.
+        # (TODO: Add Top corners if needed, but 95% are bottom)
+        
+        target_blocks = br_blocks if len(br_blocks) > len(bl_blocks) else bl_blocks
+        if not target_blocks and bottom_region_blocks:
+             target_blocks = bottom_region_blocks # Fallback to full bottom strip
+             
+        bottom_blocks = target_blocks
+        
         tb_region = None
         tb_conf = 0.0
         if bottom_blocks:
@@ -1765,9 +1926,11 @@ def _build_engineering_drawing_canonical(
         functional_role = "UNKNOWN"
 
     # Summary ready (schema)
-    summary_ready = bool(float(global_conf) >= 0.75)
-    if summary_ready and not (part_name or int(dims_count) >= 1 or int(views_count) >= 1):
-        summary_ready = False
+    summary_ready = bool(float(global_conf) >= 0.65)  # Lowered threshold
+    # Only enforce strict requirements for production drawings
+    if summary_ready and doc_type == "PRODUCTION_DRAWING":
+        if not (part_name or int(dims_count) >= 1 or int(views_count) >= 1):
+            summary_ready = False
 
     engineering_understanding: Dict[str, Any] = {
         "object_id": str(uuid.uuid4()),
@@ -2938,6 +3101,7 @@ def _worker(job_id: str, file_path: str, models: ModelRegistry) -> str:
         "confidence": {},
         "validation": {"failure_reasons": [], "ocr_confidence_histogram": {}, "closed_loop_line_ratio": 0.0, "region_coverage_pct": 0.0},
     }
+    primary_path = page_paths[0] if page_paths else None
     if page_paths:
         try:
             import numpy as np
@@ -3671,7 +3835,7 @@ def _worker(job_id: str, file_path: str, models: ModelRegistry) -> str:
 
         draw_score = float(drawing_stats_overall.get('score') or 0.0)
         has_pdf_text_any = bool(is_pdf and pdf_text_by_page and any(v.strip() for v in pdf_text_by_page.values()))
-        has_ocr_any = bool(ocr_pages and any(str(p.get('ocr_text') or p.get('text') or '').strip() for p in ocr_pages))
+        has_ocr_any = bool(ocr_pages and any(len(str(p.get('ocr_text') or p.get('text') or '').strip()) > 8 for p in ocr_pages))
         # A rendered PDF page or an uploaded image is always a "visual" artifact even if object detection returns 0.
         has_visual = bool(page_paths)
 
@@ -4039,7 +4203,7 @@ def _worker(job_id: str, file_path: str, models: ModelRegistry) -> str:
                 lines.append(f"Prima facie: this looks like a photo/image of {', '.join(obj_names[:3])}{conf_s}.")
             elif top_scene:
                 lines.append(f"Prima facie: this looks like {str(top_scene)}{conf_s}.")
-            elif preview:
+            elif preview and len(preview) > 8:
                 lines.append(f"Prima facie: I found readable text{conf_s}. Text preview: {preview}")
             else:
                 lines.append(f"Prima facie: I couldn't confidently classify the upload{conf_s}.")
@@ -4047,6 +4211,40 @@ def _worker(job_id: str, file_path: str, models: ModelRegistry) -> str:
         j["summary"] = "\n".join([ln for ln in lines if ln])
     except Exception as e:
         result["logs"].append({"stage": "judgement-summary", "error": str(e)})
+
+    # Build EUO if perception data exists
+    try:
+        from .euo_builder import build_euo
+        pv1 = result.get("perception_v1")
+        if isinstance(pv1, dict):
+            # Inject legacy part name and dimensions if available
+            metadata = result.get("metadata", {})
+            extracted_fields = result.get("extracted_fields", {})
+            
+            legacy = pv1.setdefault("_legacy", {})
+            
+            if isinstance(metadata, dict) and metadata.get("part_name"):
+                legacy["part_name"] = metadata["part_name"]
+            
+            if isinstance(extracted_fields, dict) and extracted_fields.get("dimensions"):
+                legacy["dimensions"] = extracted_fields["dimensions"]
+
+            # NEW: Inject DOM intelligence (Views/Annotations)
+            dom = (result.get('text') or {}).get('engineering_drawing_dom') if isinstance(result.get('text'), dict) else None
+            if isinstance(dom, dict):
+                legacy["dom_views"] = dom.get("views")
+                legacy["dom_dimensions"] = (dom.get("annotations") or {}).get("dimensions")
+            
+            euo = build_euo(pv1)
+            result["engineering_understanding_object"] = euo
+            # Also populate legacy fields if EUO is high confidence to help older clients/logic if needed,
+            # but for now we focus on adding the new key.
+            if euo.get("summary_ready"):
+                 # Optional: Override judgement summary if EUO is confident?
+                 # leave judgement summary generic for now.
+                 pass
+    except Exception as e:
+        result["logs"].append({"stage": "euo_builder", "error": str(e)})
 
     # 5) Save JSON
     out_path = os.path.join(RESULT_DIR, f"{job_id}.json")
