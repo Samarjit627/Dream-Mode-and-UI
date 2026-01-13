@@ -45,3 +45,5 @@ worker/node_modules/
 debug_response.py
 response.json
 *.log
+!services/dream-poc/app/build/
+!frontend/src/features/build/

@@ -1,0 +1,36 @@
+{
+    "segment": "sedan",
+    "archetype": "balanced",
+    "view": "side",
+    "priority_weights": {
+        "wheelbase": "high",
+        "greenhouse": "medium",
+        "overhangs": "medium"
+    },
+    "proportion_bands": {
+        "wheelbase_ratio": [
+            0.62,
+            0.66
+        ],
+        "body_height_to_length": [
+            0.30,
+            0.34
+        ],
+        "greenhouse_height_ratio": [
+            0.32,
+            0.36
+        ],
+        "front_overhang_ratio": [
+            0.22,
+            0.26
+        ],
+        "rear_overhang_ratio": [
+            0.26,
+            0.30
+        ],
+        "ground_clearance_ratio": [
+            0.05,
+            0.07
+        ]
+    }
+}

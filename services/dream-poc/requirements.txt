@@ -24,3 +24,10 @@ git+https://github.com/openai/CLIP.git@main
 aiofiles
 requests
 python-dotenv
+openai
+build123d
+scipy
+scikit-image
+diffusers
+transformers
+accelerate

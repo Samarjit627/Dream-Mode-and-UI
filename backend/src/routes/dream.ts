@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { createProxyMiddleware, responseInterceptor } from 'http-proxy-middleware'
 
-const DREAM_TARGET = process.env.DREAM_POC_BASE || 'http://localhost:8001'
+const DREAM_TARGET = 'http://localhost:8001' // FORCE LOCAL BYPASS
 
 const r = Router()
 

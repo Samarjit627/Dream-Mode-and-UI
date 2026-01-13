@@ -5,7 +5,7 @@ import re
 import math
 from datetime import datetime
 from threading import Thread
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 
 from .utils import read_image_from_path, dominant_color_hex
 from .models_loader import ModelRegistry
@@ -587,57 +587,8 @@ def _perception_paddleocr(rgb_arr, page_idx: int, dpi: float = 0.0) -> Dict[str,
         "text_blocks": [],
         "_metrics": {"engine": "paddleocr", "count": 0, "conf_hist": {}},
     }
-    try:
-        import numpy as np
-        from paddleocr import PaddleOCR  # type: ignore
-        if rgb_arr is None:
-            return out
-        h, w = rgb_arr.shape[:2]
-        ocr = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
-        rr = ocr.ocr(rgb_arr, cls=True)
-        blocks: List[Dict[str, Any]] = []
-        confs: List[float] = []
-        if isinstance(rr, list) and rr:
-            for item in rr[0] if (len(rr) == 1 and isinstance(rr[0], list)) else rr:
-                try:
-                    quad = item[0]
-                    txt = item[1][0]
-                    conf = float(item[1][1])
-                except Exception:
-                    continue
-                if not txt:
-                    continue
-                xs = [float(p[0]) for p in quad]
-                ys = [float(p[1]) for p in quad]
-                x1, y1, x2, y2 = float(min(xs)), float(min(ys)), float(max(xs)), float(max(ys))
-                blocks.append({
-                    "page": int(page_idx),
-                    "text": str(txt),
-                    "bbox_px": [x1, y1, x2, y2],
-                    "bbox_norm": _bbox_norm_from_px(x1, y1, x2, y2, float(w), float(h)),
-                    "angle": float(_angle_from_quad(quad)),
-                    "confidence": float(conf),
-                })
-                confs.append(float(conf))
-
-        hist: Dict[str, int] = {"0.0-0.2": 0, "0.2-0.4": 0, "0.4-0.6": 0, "0.6-0.8": 0, "0.8-1.0": 0}
-        for c in confs:
-            if c < 0.2:
-                hist["0.0-0.2"] += 1
-            elif c < 0.4:
-                hist["0.2-0.4"] += 1
-            elif c < 0.6:
-                hist["0.4-0.6"] += 1
-            elif c < 0.8:
-                hist["0.6-0.8"] += 1
-            else:
-                hist["0.8-1.0"] += 1
-
-        out["text_blocks"] = blocks
-        out["_metrics"] = {"engine": "paddleocr", "count": int(len(blocks)), "conf_hist": hist}
-        return out
-    except Exception:
-        return out
+    # Safe Mode: fast return to avoid crashes
+    return out
 
 
 def _extract_pdf_text(pdf_path: str, max_pages: int = 10) -> List[Dict[str, Any]]:
@@ -2386,7 +2337,7 @@ def _extract_viewport_clusters(
     rgb_arr,
     border_bbox: List[float],
     title_bbox,
-    words: List[Dict[str, Any]] | None = None,
+    words: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     try:
         import cv2  # type: ignore
@@ -2482,7 +2433,7 @@ def _extract_viewport_clusters(
 
     debug: Dict[str, Any] = {"tiles": [], "cuts": []}
 
-    def _find_best_gutter_cut(proj: "np.ndarray", min_run: int) -> int | None:
+    def _find_best_gutter_cut(proj: "np.ndarray", min_run: int) -> Optional[int]:
         # proj is 1D counts; find the longest run below a low threshold.
         if proj is None or proj.size < (min_run * 2):
             return None
@@ -2616,7 +2567,7 @@ def _split_viewport_children_v2(
     rgb_arr,
     viewport_bbox: List[float],
     title_bbox,
-    words: List[Dict[str, Any]] | None = None,
+    words: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     try:
         import cv2  # type: ignore
@@ -2712,7 +2663,7 @@ def _split_viewport_children_v2(
     ebin = (edges > 0).astype(np.uint8)
     debug: Dict[str, Any] = {"tiles": [], "status": None}
 
-    def _find_best_gutter_cut(proj: "np.ndarray", min_run: int) -> int | None:
+    def _find_best_gutter_cut(proj: "np.ndarray", min_run: int) -> Optional[int]:
         if proj is None or proj.size < (min_run * 2):
             return None
         thr = float(max(1.0, float(proj.mean()) * 0.08))
@@ -4245,6 +4196,77 @@ def _worker(job_id: str, file_path: str, models: ModelRegistry) -> str:
                  pass
     except Exception as e:
         result["logs"].append({"stage": "euo_builder", "error": str(e)})
+
+    # DREAM MODE INTEGRATION:
+    # Inject Higher-Order Design Intelligence (GPT-4o Judgment)
+    try:
+        from .dream.judgment.engine import judge_design
+        import base64
+        
+        target_vis_path = page_paths[0] if (page_paths and os.path.exists(page_paths[0])) else file_path
+        
+        if os.path.exists(target_vis_path):
+            with open(target_vis_path, "rb") as img_f:
+                b64_str = base64.b64encode(img_f.read()).decode("utf-8")
+                mime_type = "image/png"
+                if target_vis_path.lower().endswith((".jpg", ".jpeg")):
+                     mime_type = "image/jpeg"
+                full_b64 = f"data:{mime_type};base64,{b64_str}"
+                
+                # Run Judgment Engine
+                judgment_resp = judge_design(full_b64)
+                
+                # Update Result Payload
+                j_obj = result.get("judgement")
+                if not isinstance(j_obj, dict):
+                    j_obj = {}
+                
+                j_obj["dream_critique"] = judgment_resp.dict()
+                
+                
+                gl_status = "NONE"
+                if judgment_resp.active_ghost_layer:
+                    j_obj["active_ghost_layer"] = judgment_resp.active_ghost_layer.dict()
+                    gl_status = "FOUND"
+                    if judgment_resp.active_ghost_layer.lines:
+                        gl_status += f" (lines={len(judgment_resp.active_ghost_layer.lines)})"
+                else:
+                    # HARD FALLBACK: If LLM fails, generate a synthetic default layer
+                    # This ensures the UI always has something to show.
+                    gl_status = "FALLBACK"
+                    fallback_layer = {
+                        "type": "fallback_axis",
+                        "elements": [
+                            {"shape": "axis", "x": 50, "y": 0, "type": "vertical"},
+                            {"shape": "blob", "x": 50, "y": 50, "r": 20, "opacity": 0.3}
+                        ],
+                        "lines": []
+                    }
+                    j_obj["active_ghost_layer"] = fallback_layer
+                    gl_status += " (SYNTHETIC)"
+
+                # INJECT DEBUG INTO DREAM CRITIQUE SUMMARY (for RightChat)
+                if "dream_critique" in j_obj and isinstance(j_obj["dream_critique"], dict):
+                    dc = j_obj["dream_critique"]
+                    dc["summary"] = f"{dc.get('summary', '')}\n\n[DEBUG: GhostLayer={gl_status}]"
+                    j_obj["dream_critique"] = dc
+
+                # Also update top-level summary just in case
+                j_obj["summary"] = f"{j_obj.get('summary', '')}\n\n[DEBUG: GhostLayer={gl_status}]"
+
+                result["judgement"] = j_obj
+                result["logs"].append({"stage": "dream_judgment", "status": "success"})
+    except Exception as e:
+        print(f"Dream Judgment Error: {e}")
+        # INJECT ERROR INTO SUMMARY SO USER CAN SEE IT
+        # This is critical for debugging why Dream Mode is silent
+        j_obj = result.get("judgement")
+        if not isinstance(j_obj, dict): j_obj = {}
+        error_msg = f"\n\n[DEBUG: Dream Logic Failed: {str(e)}]"
+        j_obj["summary"] = f"{j_obj.get('summary', '')}{error_msg}"
+        result["judgement"] = j_obj
+        
+        result["logs"].append({"stage": "dream_judgment", "error": str(e)})
 
     # 5) Save JSON
     out_path = os.path.join(RESULT_DIR, f"{job_id}.json")

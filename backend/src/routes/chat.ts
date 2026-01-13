@@ -790,14 +790,20 @@ async function fallbackReply(body: ChatRequestBody): Promise<string> {
   // Senior Engineering Chat Integration
 
   // OPTIMIZATION: Visual Session Caching
-  if (body?.context?.masterDescription) {
-    console.log('[FAST CHAT] Using Cached Description:', body.context.masterDescription.slice(0, 100) + '...')
-    const fastReply = await generateTextResponse(body.context.masterDescription, msg)
-    console.log('[FAST CHAT] Reply:', fastReply)
-    if (fastReply) return fastReply
-  } else {
-    console.log('[FAST CHAT] No Master Description found in context.')
-  }
+  // A0.2: Enable Conversation-Led Mode even without MasterDescription
+  const history = (Array.isArray(body.messages) && body.messages.length > 0)
+    ? body.messages
+    : [{ role: 'user', content: msg }]
+
+  const sourceContext = body?.context?.masterDescription || "No file uploaded. User is in Conversation-Led Intent Discovery Mode."
+
+  // Always try LLM first for broader queries, unless it's a specific trivial lookup?
+  // Actually, for Dream Mode, we ALWAYS want the LLM.
+  // We can assume if we are here, we want the LLM to handle it.
+  const judgement = (body?.context?.judgement && typeof body.context.judgement === 'object') ? body.context.judgement : null
+  const resp = await generateTextResponse(sourceContext, history, judgement)
+  return resp
+
 
   if (understanding) {
     const imageUrl = (body?.context?.imageUrl && typeof body.context.imageUrl === 'string') ? body.context.imageUrl : undefined

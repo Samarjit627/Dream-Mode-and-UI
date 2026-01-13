@@ -8,6 +8,9 @@ import DreamAnalyze from './pages/DreamAnalyze'
 import DreamIdeate from './pages/DreamIdeate'
 import DreamMentor from './pages/DreamMentor'
 import Home from './pages/Home'
+import DreamMode from './pages/DreamMode'
+
+import BuildMode from './pages/BuildMode';
 
 const router = createBrowserRouter([
   { path: '/', element: <Home /> },
@@ -18,6 +21,8 @@ const router = createBrowserRouter([
       { path: 'analyze', element: <DreamAnalyze /> },
       { path: 'ideate', element: <DreamIdeate /> },
       { path: 'mentor', element: <DreamMentor /> },
+      { path: 'mode', element: <DreamMode /> },
+      { path: 'build', element: <BuildMode /> },
     ]
   }
 ])

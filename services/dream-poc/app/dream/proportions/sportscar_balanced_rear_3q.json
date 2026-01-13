@@ -1,0 +1,28 @@
+{
+    "segment": "sportscar",
+    "archetype": "balanced",
+    "view": "rear_3q",
+    "priority_weights": {
+        "rear_mass": "high",
+        "wheel_dominance": "high",
+        "greenhouse": "low"
+    },
+    "proportion_bands": {
+        "front_wheel_scale": [
+            0.80,
+            0.85
+        ],
+        "rear_mass_width_ratio": [
+            0.58,
+            0.62
+        ],
+        "rear_mass_height_ratio": [
+            0.34,
+            0.38
+        ],
+        "ground_clearance_ratio": [
+            0.03,
+            0.06
+        ]
+    }
+}

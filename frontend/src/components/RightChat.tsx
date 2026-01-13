@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 type Props = {
   onAttach: (kind: 'sketch' | 'cad') => void
   context?: {
-    artifact?: 'none' | 'sketch' | 'cad'
+    artifact?: 'none' | 'sketch' | 'cad' | 'dream'
     understanding?: { kind: string; payload?: any } | null
     detectedLabel?: string | null
     detectedProb?: number | null
@@ -29,6 +29,11 @@ type Props = {
     objects?: Array<{ class?: string; confidence?: number; class_clip_guess?: string; clip_score?: number }> | null
     imageUrl?: string | null
     masterDescription?: string | null
+    // Geometric Sketch Warping
+    warpedImageBase64?: string | null
+    warpCorrections?: string[] | null
+    isWarping?: boolean
+    onRequestWarp?: () => void
   }
 }
 
@@ -43,7 +48,11 @@ export default function RightChat({ onAttach, context }: Props) {
   const [menu, setMenu] = useState(false)
   const [sending, setSending] = useState(false)
   const [messages, setMessages] = useState<ChatMsg[]>([
-    { id: 'a0', role: 'assistant', content: 'Chat is ready. Upload a file, then tell me what you want to do.' }
+    {
+      id: 'welcome',
+      role: 'assistant',
+      content: `**We can design this entirely through conversation.**\n\nBefore we think about shape, let's understand what this object needs to be.\n\nWhat problem does this object exist to solve?`
+    }
   ])
   const listRef = useRef<HTMLDivElement>(null)
   const lastContextSigRef = useRef<string>('')
@@ -76,17 +85,18 @@ export default function RightChat({ onAttach, context }: Props) {
     ])
   }, [context?.sceneCandidates, context?.sceneUncertainty])
 
-  const send = useCallback(async () => {
-    const content = text.trim()
-    if (!content || sending) return
+  const send = useCallback(async (textOverride?: string) => {
+    // If textOverride is provided, use it. Otherwise use state text.
+    const msgContent = typeof textOverride === 'string' ? textOverride : text
+    if (!msgContent.trim() || sending) return
 
-    const wantsGuesses = /\b(show guesses|debug classification)\b/i.test(content)
     setSending(true)
-    setMenu(false)
-    setText('')
-
-    const userMsg: ChatMsg = { id: `u_${Date.now()}`, role: 'user', content }
+    const userMsg: ChatMsg = { id: `u_${Date.now()}`, role: 'user', content: msgContent }
     setMessages((prev) => [...prev, userMsg])
+    setText('') // Always clear input
+    setMenu(false) // Keep this here, it's not part of the diff but was in original code.
+
+    const wantsGuesses = /\b(show guesses|debug classification)\b/i.test(msgContent)
 
     if (wantsGuesses) {
       appendGuessDebug()
@@ -142,7 +152,7 @@ export default function RightChat({ onAttach, context }: Props) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: content,
+          message: msgContent,
           messages: [...messagesRef.current, userMsg].map((m) => ({ role: m.role, content: m.content })),
           context: ctxForChat,
         })
@@ -313,6 +323,31 @@ export default function RightChat({ onAttach, context }: Props) {
       nextActions.push('Ask for design feedback / improvement suggestions')
     }
 
+    // DREAM MODE INTEGRATION:
+    // If we have a Dream Critique, inject its questions as high-priority next actions.
+    const dreamCritique = (context?.judgement as any)?.dream_critique
+    if (dreamCritique && Array.isArray(dreamCritique.results)) {
+      // Extract questions from failed/warn rules
+      const qs = dreamCritique.results
+        .filter((r: any) => (r.status === 'fail' || r.status === 'warn') && r.question)
+        .map((r: any) => r.question)
+
+      // Prepend them to recommended actions to drive the conversation
+      nextActions.unshift(...qs)
+    }
+
+    // Update summary if critique summary exists
+    if (dreamCritique?.summary) {
+      // A0.3 REFERENCE-LED SCRIPT (Mandatory Opening)
+      const opening = `**I’ll treat this reference as inspiration, not a template.**\n\nLet’s understand why this attracts you before deciding what to build.\n\n`
+
+      // COMBINE Legacy Summary (Prima Facie) with Dream Critique
+      const legacySummary = summary ? `**Initial Perception**\n${summary}\n\n` : ''
+      summary = `${legacySummary}${opening}**Design Critique**\n${dreamCritique.summary}`
+    }
+
+
+
     const nextBlock = nextActions.length
       ? `\n\nRecommended next actions:\n${nextActions.slice(0, 5).map((a) => `- ${a}`).join('\n')}`
       : ''
@@ -350,22 +385,86 @@ export default function RightChat({ onAttach, context }: Props) {
   return (
     <div className="border rounded-lg p-3 h-full flex flex-col" style={{ background: 'var(--panel)', borderColor: 'var(--border)', color: 'var(--text)' }}>
       <div ref={listRef} className="flex-1 overflow-auto text-sm space-y-2">
-        {messages.map((m) => (
-          <div key={m.id} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-            <div
-              className="max-w-[92%] rounded-xl px-3 py-2 border"
-              style={{
-                background: m.role === 'user' ? 'var(--panel-2)' : 'transparent',
-                borderColor: 'var(--border)',
-                color: 'var(--text)'
-              }}
-            >
-              <div className="whitespace-pre-wrap">{m.content}</div>
+        {messages.map((m) => {
+          // Parse Suggestions
+          let text = m.content
+          const suggestions: string[] = []
+          const regex = /\|\|Suggest: (.*?)\|\|/g
+          let match
+          while ((match = regex.exec(m.content)) !== null) {
+            suggestions.push(match[1])
+          }
+          // Remove standard suggestions from display text
+          text = text.replace(regex, '').trim()
+
+          return (
+            <div key={m.id} className={m.role === 'user' ? 'flex justify-end' : 'flex flex-col items-start gap-2'}>
+              <div
+                className={`max-w-[92%] rounded-xl px-3 py-2 border ${m.role === 'user' ? '' : 'bg-transparent'}`}
+                style={{
+                  background: m.role === 'user' ? 'var(--panel-2)' : 'transparent',
+                  borderColor: 'var(--border)',
+                  color: 'var(--text)'
+                }}
+              >
+                <div className="whitespace-pre-wrap">{text}</div>
+              </div>
+              {m.role === 'assistant' && suggestions.length > 0 && (
+                <div className="flex flex-wrap gap-2 ml-1">
+                  {suggestions.map((s, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => !sending && send(s)}
+                      disabled={sending}
+                      className="px-3 py-1.5 rounded-full border text-xs font-medium hover:bg-neutral-800 transition-colors"
+                      style={{ borderColor: 'var(--border)', color: 'var(--link)' }}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          )
+        })}
         {sending && (
           <div className="text-xs" style={{ color: 'var(--muted)' }}>Thinking…</div>
+        )}
+
+        {/* Sketch Warp Status */}
+        {context?.warpedImageBase64 && (
+          <div className="mt-4 p-3 rounded-lg border-2 border-green-500 bg-green-900/20">
+            <div className="text-xs font-bold text-green-300 mb-2">✅ Proportions Corrected</div>
+            <div className="text-sm" style={{ color: 'var(--text)' }}>
+              <p>Your sketch has been warped to correct proportions. Use "View Warped" to see the result.</p>
+            </div>
+            {context.warpCorrections && context.warpCorrections.length > 0 && (
+              <div className="text-xs mt-2 opacity-70">
+                {context.warpCorrections.join(' • ')}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Request Warp Button */}
+        {context?.judgement && !context?.warpedImageBase64 && !context?.isWarping && (
+          <div className="mt-4">
+            <button
+              onClick={() => context?.onRequestWarp?.()}
+              className="w-full py-2 px-4 rounded-lg bg-gradient-to-r from-green-600 to-teal-500 text-white font-bold hover:from-green-500 hover:to-teal-400 transition-all"
+            >
+              ✨ Fix Proportions
+            </button>
+            <p className="text-xs text-center mt-1" style={{ color: 'var(--muted)' }}>
+              Warp your sketch to correct proportions
+            </p>
+          </div>
+        )}
+
+        {context?.isWarping && (
+          <div className="mt-4 p-3 rounded-lg border border-yellow-500 bg-yellow-900/20 animate-pulse">
+            <div className="text-sm text-yellow-300 text-center">🔄 Warping sketch...</div>
+          </div>
         )}
       </div>
       <div className="mt-2 flex items-center gap-2">
@@ -392,7 +491,7 @@ export default function RightChat({ onAttach, context }: Props) {
           style={{ background: 'var(--panel-2)', borderColor: 'var(--border)', color: 'var(--text)' }}
           disabled={sending}
         />
-        <button className="px-3 py-1 border rounded text-sm" onClick={send} disabled={!canSend}>
+        <button className="px-3 py-1 border rounded text-sm" onClick={() => send()} disabled={!canSend}>
           {sending ? '...' : 'Send'}
         </button>
       </div>

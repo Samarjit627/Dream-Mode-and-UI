@@ -4,9 +4,14 @@ from fastapi.responses import JSONResponse
 from .processing import process_upload_sync, process_upload_async
 from .models_loader import ModelRegistry
 from .perception_router import router as perception_router
+from .dream.api import router as dream_router
+# BUILD MODE disabled for now (focus on Dream Mode)
+# from .build.api import router as build_router
 
 app = FastAPI(title="Axis5 Dream PoC")
 app.include_router(perception_router)
+app.include_router(dream_router)
+# app.include_router(build_router)  # Disabled: BUILD MODE
 models = ModelRegistry()
 
 @app.get("/health")

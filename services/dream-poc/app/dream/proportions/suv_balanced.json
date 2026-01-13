@@ -1,0 +1,37 @@
+{
+    "segment": "suv",
+    "archetype": "balanced",
+    "view": "front_3q",
+    "priority_weights": {
+        "wheel_dominance": "high",
+        "wheelbase": "medium",
+        "greenhouse": "medium",
+        "rear_mass": "medium"
+    },
+    "proportion_bands": {
+        "rear_wheel_scale": [
+            0.88,
+            0.92
+        ],
+        "wheelbase_ratio": [
+            0.56,
+            0.60
+        ],
+        "body_height_to_length": [
+            0.42,
+            0.48
+        ],
+        "greenhouse_height_ratio": [
+            0.40,
+            0.46
+        ],
+        "ground_clearance_ratio": [
+            0.08,
+            0.10
+        ],
+        "rear_mass_length_ratio": [
+            0.30,
+            0.34
+        ]
+    }
+}

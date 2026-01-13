@@ -81,36 +81,10 @@ export default function SketchCanvas({ url, boxes = [], words = [] }: { url: str
     // draw image
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
     // overlays
-    if (showCenter) {
-      // vertical centerline
-      const cx = Math.floor(canvas.width / 2)
-      ctx.save()
-      ctx.strokeStyle = '#22c55e'
-      ctx.lineWidth = 1.5
-      ctx.setLineDash([6, 4])
-      ctx.beginPath()
-      ctx.moveTo(cx, 0)
-      ctx.lineTo(cx, canvas.height)
-      ctx.stroke()
-      ctx.restore()
-    }
-    if (showBand) {
-      const y = Math.round(beltY * canvas.height)
-      const bandH = Math.max(8, Math.floor(canvas.height * 0.06))
-      const y0 = Math.max(0, y - Math.floor(bandH / 2))
-      ctx.save()
-      // band fill
-      ctx.fillStyle = 'rgba(16,185,129,0.18)'
-      ctx.fillRect(0, y0, canvas.width, bandH)
-      // beltline center line
-      ctx.strokeStyle = '#10b981'
-      ctx.lineWidth = 2
-      ctx.setLineDash([])
-      ctx.beginPath()
-      ctx.moveTo(0, y)
-      ctx.lineTo(canvas.width, y)
-      ctx.stroke()
-      ctx.restore()
+    // overlays
+    // (Disabled per user request: No green/red lines)
+    if (false) {
+      // logic removed
     }
     // detection boxes
     if (boxes && boxes.length) {
@@ -126,7 +100,7 @@ export default function SketchCanvas({ url, boxes = [], words = [] }: { url: str
         const w = Math.round(nw * canvas.width)
         const h = Math.round(nh * canvas.height)
         ctx.strokeRect(x, y, w, h)
-        const label = `${b.label} ${(b.score*100|0)}%`
+        const label = `${b.label} ${(b.score * 100 | 0)}%`
         const tw = Math.ceil(ctx.measureText(label).width + 6)
         const th = 16
         ctx.fillRect(x, Math.max(0, y - th), tw, th)

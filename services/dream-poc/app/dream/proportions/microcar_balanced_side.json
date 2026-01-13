@@ -1,0 +1,36 @@
+{
+    "segment": "microcar",
+    "archetype": "balanced",
+    "view": "side",
+    "priority_weights": {
+        "wheelbase": "high",
+        "greenhouse": "high",
+        "overhangs": "medium"
+    },
+    "proportion_bands": {
+        "wheelbase_ratio": [
+            0.52,
+            0.56
+        ],
+        "body_height_to_length": [
+            0.42,
+            0.46
+        ],
+        "greenhouse_height_ratio": [
+            0.44,
+            0.50
+        ],
+        "front_overhang_ratio": [
+            0.22,
+            0.26
+        ],
+        "rear_overhang_ratio": [
+            0.24,
+            0.28
+        ],
+        "ground_clearance_ratio": [
+            0.06,
+            0.08
+        ]
+    }
+}

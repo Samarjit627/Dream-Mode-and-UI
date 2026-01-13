@@ -1,0 +1,36 @@
+{
+    "segment": "sportscar",
+    "archetype": "balanced",
+    "view": "side",
+    "priority_weights": {
+        "wheelbase": "high",
+        "greenhouse": "high",
+        "overhangs": "medium"
+    },
+    "proportion_bands": {
+        "wheelbase_ratio": [
+            0.62,
+            0.66
+        ],
+        "body_height_to_length": [
+            0.24,
+            0.28
+        ],
+        "greenhouse_height_ratio": [
+            0.26,
+            0.30
+        ],
+        "front_overhang_ratio": [
+            0.18,
+            0.22
+        ],
+        "rear_overhang_ratio": [
+            0.20,
+            0.24
+        ],
+        "ground_clearance_ratio": [
+            0.03,
+            0.06
+        ]
+    }
+}

@@ -1,0 +1,32 @@
+{
+    "segment": "microcar",
+    "archetype": "balanced",
+    "view": "rear_3q",
+    "priority_weights": {
+        "rear_mass": "high",
+        "wheel_dominance": "medium",
+        "greenhouse": "medium"
+    },
+    "proportion_bands": {
+        "front_wheel_scale": [
+            0.86,
+            0.90
+        ],
+        "rear_mass_width_ratio": [
+            0.55,
+            0.60
+        ],
+        "rear_mass_height_ratio": [
+            0.45,
+            0.50
+        ],
+        "greenhouse_height_ratio": [
+            0.44,
+            0.50
+        ],
+        "ground_clearance_ratio": [
+            0.06,
+            0.08
+        ]
+    }
+}

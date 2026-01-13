@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import ThemeToggle from '../components/ThemeToggle'
 import ToastHub from '../components/ToastHub'
 import RightChat from '../components/RightChat'
@@ -10,6 +10,11 @@ import { uploadStep } from '../lib/api'
 import { exportDreamZip } from '../lib/export'
 import type { Detection, OcrWord } from '../lib/vision'
 import * as pdfjsLib from 'pdfjs-dist';
+
+// Dream Mode Imports
+import DreamCanvas from '../features/dream/DreamCanvas'
+import GhostLayer, { GhostStroke, Annotation } from '../features/dream/GhostLayer'
+import { useStrokeIngestion } from '../features/dream/hooks/useStrokeIngestion'
 
 // Start Worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
@@ -26,9 +31,21 @@ export type Intent = {
 
 export default function Shell() {
   const navigate = useNavigate()
+  const location = useLocation();
+
+  // Force Dream Mode when clicking "Dream" tab (navigating to /dream root or build)
+  useEffect(() => {
+    if (location.pathname.startsWith('/dream')) {
+      setArtifact('dream');
+    }
+  }, [location.pathname]);
+  // Ensure location is used
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [intent, setIntent] = useState<Intent>({})
-  const [artifact, setArtifact] = useState<'none' | 'sketch' | 'cad'>('none')
+  // Default to dream mode if at root /dream
+  const [artifact, setArtifact] = useState<'none' | 'sketch' | 'cad' | 'dream'>(
+    (location.pathname.startsWith('/dream')) ? 'dream' : 'none'
+  )
   const [glbUrl, setGlbUrl] = useState<string | null>(null)
   const [sketchUrl, setSketchUrl] = useState<string | null>(null)
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
@@ -58,6 +75,229 @@ export default function Shell() {
   const [masterDescription, setMasterDescription] = useState<string | null>(null)
   const [resolvedImageUrls, setResolvedImageUrls] = useState<string[] | null>(null)
   const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null) // Legacy/Fallback
+  const [showGhost, setShowGhost] = useState(true);
+
+  // --- Dream Mode State ---
+  const { strokes, startStroke, addPoint, endStroke } = useStrokeIngestion();
+  const [ghostStrokes, setGhostStrokes] = useState<GhostStroke[]>([]);
+  const [symmetryAxis, setSymmetryAxis] = useState<{ x: number; type: 'vertical' } | null>(null);
+  const [isDreamThinking, setIsDreamThinking] = useState(false);
+  const [lockedGraph, setLockedGraph] = useState<any>(null);
+
+  // --- Template-Based Sketch Warping State ---
+  const [warpedImageBase64, setWarpedImageBase64] = useState<string | null>(null);
+  const [comparisonImageBase64, setComparisonImageBase64] = useState<string | null>(null);
+  const [warpCorrections, setWarpCorrections] = useState<string[]>([]);
+  const [showWarpedImage, setShowWarpedImage] = useState(false);
+  const [isWarping, setIsWarping] = useState(false);
+  const [selectedSegment, setSelectedSegment] = useState<string>('hatchback');
+  const [selectedView, setSelectedView] = useState<string>('front_3q');
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    startStroke(e.nativeEvent.offsetX, e.nativeEvent.offsetY, e.pressure);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (e.buttons !== 1) return;
+    addPoint(e.nativeEvent.offsetX, e.nativeEvent.offsetY, e.pressure);
+  };
+  const onPointerUp = (e: React.PointerEvent) => endStroke();
+
+  // Dream Logic Loop
+  useEffect(() => {
+    if (strokes.length === 0) return;
+    const timer = setTimeout(async () => {
+      setIsDreamThinking(true);
+      try {
+        const res = await fetch('/api/v1/dream/ingest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ strokes, canvas_width: window.innerWidth, canvas_height: window.innerHeight })
+        });
+        const data = await res.json();
+        if (data.clean_strokes) {
+          setGhostStrokes(data.clean_strokes.map((s: any) => ({
+            id: s.id, points: s.points, color: '#00ff00', width: 3
+          })));
+        }
+        if (data.structure?.symmetries?.length > 0 && data.structure.symmetries[0].type === 'vertical') {
+          setSymmetryAxis({ x: data.structure.symmetries[0].x, type: 'vertical' });
+        }
+      } catch (e) { console.error(e) }
+      finally { setIsDreamThinking(false); }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [strokes]);
+
+  // Lock Intent Handler
+  const onLockIntent = async () => {
+    setIsDreamThinking(true);
+    try {
+      const res = await fetch('/api/v1/dream/lock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ strokes, canvas_width: window.innerWidth, canvas_height: window.innerHeight })
+      });
+      const graph = await res.json();
+      setLockedGraph(graph);
+      setJudgement({
+        kind: 'sketch_critique',
+        confidence: 0.9,
+        summary: `Intent Locked. ${graph.nodes?.length} primitives. ${graph.structure?.symmetries?.length ? 'Symmetric.' : ''} Ready for build.`,
+        evidence: graph
+      });
+      setUnderstanding({ kind: 'dream_sketch', payload: graph });
+      window.dispatchEvent(new CustomEvent('axis5:toast', { detail: 'Intent Locked' }));
+      // Navigate or update UI to show Build button?
+      navigate('/dream/build', { state: { lockedGraph: graph } });
+    } catch (e) { console.error(e); }
+    finally { setIsDreamThinking(false); }
+  };
+
+  // --- Mentor Mode State ---
+  const [correctionStrength, setCorrectionStrength] = useState<number>(0.665);
+  const [isTuning, setIsTuning] = useState(false);
+
+  const tuneSketch = async (newStrength: number) => {
+    if (!sketchUrl && !resolvedImageUrls?.[0]) return;
+    setIsTuning(true);
+    setCorrectionStrength(newStrength); // Update UI immediately
+
+    try {
+      // Get the image as base64 (Original)
+      const imageUrl = sketchUrl || resolvedImageUrls?.[0];
+      let imageBase64 = '';
+      if (imageUrl) {
+        const response = await fetch(imageUrl);
+        const blob = await response.blob();
+        imageBase64 = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      const res = await fetch('/api/v1/dream/mentor/tune', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base_image: imageBase64,
+          segment: selectedSegment,
+          view: selectedView,
+          strength: newStrength
+        })
+      });
+
+      const result = await res.json();
+      if (!result.success) {
+        window.dispatchEvent(new CustomEvent('axis5:toast', { detail: `Tuning failed: ${result.message}` }));
+        return;
+      }
+
+      // Update with tuned result
+      setWarpedImageBase64(result.corrected_image_base64);
+      window.dispatchEvent(new CustomEvent('axis5:toast', { detail: `Strength updated to ${newStrength}` }));
+
+    } catch (e) {
+      console.error(e);
+      window.dispatchEvent(new CustomEvent('axis5:toast', { detail: 'Tuning failed' }));
+    } finally {
+      setIsTuning(false);
+    }
+  };
+
+  // --- Geometric Sketch Warping ---
+  const warpSketch = async () => {
+    if (!sketchUrl && !resolvedImageUrls?.[0]) {
+      window.dispatchEvent(new CustomEvent('axis5:toast', { detail: 'No sketch to warp' }));
+      return;
+    }
+
+    setIsWarping(true);
+    setWarpedImageBase64(null);
+    setWarpCorrections([]);
+
+    try {
+      // Get the image as base64
+      const imageUrl = sketchUrl || resolvedImageUrls?.[0];
+      let imageBase64 = '';
+
+      if (imageUrl) {
+        const response = await fetch(imageUrl);
+        const blob = await response.blob();
+        imageBase64 = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      const res = await fetch('/api/v1/dream/correct', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: imageBase64,
+          segment: selectedSegment,
+          view: selectedView,
+          strength: correctionStrength
+        })
+      });
+
+      const result = await res.json();
+
+      if (!result.success) {
+        window.dispatchEvent(new CustomEvent('axis5:toast', { detail: `Warp failed: ${result.message}` }));
+        return;
+      }
+
+      // Store the warped image and comparison
+      setWarpedImageBase64(result.warped_image_base64);
+      setComparisonImageBase64(result.comparison_image_base64 || null);
+      setWarpCorrections(result.corrections || []);
+      setShowWarpedImage(true);
+
+      const correctionCount = result.corrections?.length || 0;
+      window.dispatchEvent(new CustomEvent('axis5:toast', {
+        detail: correctionCount > 0
+          ? `Sketch warped! ${correctionCount} proportional corrections applied.`
+          : 'Proportions already correct!'
+      }));
+
+    } catch (e) {
+      console.error('Warp failed:', e);
+      window.dispatchEvent(new CustomEvent('axis5:toast', { detail: 'Failed to warp sketch' }));
+    } finally {
+      setIsWarping(false);
+    }
+  };
+
+  // --- Feedback Loop ---
+  const applyCorrection = () => {
+    if (!warpedImageBase64) return;
+
+    // Convert base64 to Blob URL for consistency
+    fetch(warpedImageBase64)
+      .then(res => res.blob())
+      .then(blob => {
+        const newUrl = URL.createObjectURL(blob);
+        setSketchUrl(newUrl);
+        // If we had a resolvedImageUrl (upload), override it too or just rely on sketchUrl
+        setResolvedImageUrls(null);
+
+        setWarpedImageBase64(null);
+        setComparisonImageBase64(null);
+        setShowWarpedImage(false);
+        window.dispatchEvent(new CustomEvent('axis5:toast', { detail: 'Correction Applied! 🚀' }));
+      });
+  };
+
+  const discardCorrection = () => {
+    setWarpedImageBase64(null);
+    setComparisonImageBase64(null);
+    setShowWarpedImage(false);
+    window.dispatchEvent(new CustomEvent('axis5:toast', { detail: 'Correction Discarded' }));
+  };
+
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -366,12 +606,7 @@ export default function Shell() {
         }
 
         if (out?.judgement && typeof out.judgement === 'object') {
-          setJudgement({
-            kind: typeof out.judgement.kind === 'string' ? out.judgement.kind : undefined,
-            confidence: typeof out.judgement.confidence === 'number' ? out.judgement.confidence : undefined,
-            evidence: out.judgement.evidence,
-            summary: typeof out.judgement.summary === 'string' ? out.judgement.summary : undefined,
-          })
+          setJudgement(out.judgement)
         }
 
         if (out?.text?.engineering && typeof out.text.engineering === 'object') {
@@ -563,6 +798,8 @@ export default function Shell() {
     })
   }
 
+
+
   return (
     <div className="min-h-screen flex flex-col">
       <ToastHub />
@@ -590,11 +827,11 @@ export default function Shell() {
         </div>
       </header>
 
-      <BestNextStep artifact={artifact} onAction={onBestNext} />
+      <BestNextStep artifact={artifact as any} onAction={onBestNext} />
 
       <div className="flex-1 w-full px-4 py-4 min-h-0">
         <div className="h-[calc(100vh-220px)] min-h-[520px] min-h-0 grid grid-cols-1 md:grid-cols-[70%_30%] gap-4">
-          <div className="h-full rounded-3xl border overflow-hidden" style={{ background: 'var(--panel)', borderColor: 'var(--border)' }}>
+          <div className="h-full rounded-3xl border overflow-hidden relative" style={{ background: 'var(--panel)', borderColor: 'var(--border)' }}>
             <Viewer
               glbUrl={glbUrl}
               sketchUrl={sketchUrl}
@@ -610,6 +847,143 @@ export default function Shell() {
               busy={analyzing}
               busyLabel={pdfUrl ? "Analyzing PDF…" : "Analyzing image…"}
             />
+            {(artifact === 'dream' || artifact === 'sketch') && (
+              <div
+                className={`absolute inset-0 z-10 bg-transparent pointer-events-none`}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.files?.[0]) {
+                    onDropFile(e.dataTransfer.files[0]);
+                  }
+                }}
+              >
+                <DreamCanvas
+                  strokes={strokes}
+                  onPointerDown={onPointerDown}
+                  onPointerMove={onPointerMove}
+                  onPointerUp={onPointerUp}
+                />
+                {/* Ghost Layer Disabled per User Request */}
+                {/* {showGhost && (
+                  <GhostLayer
+                     ...
+                  />
+                )} */}
+
+                {/* Warped Sketch Display with Comparison */}
+                {showWarpedImage && (warpedImageBase64 || comparisonImageBase64) && (
+                  <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/80">
+                    <div className="relative max-w-[95%] max-h-[90%] flex flex-col items-center">
+                      {/* Show comparison if available, otherwise warped */}
+                      <img
+                        src={comparisonImageBase64 || warpedImageBase64 || ''}
+                        alt="Warped Sketch Comparison"
+                        className="max-w-full max-h-[70vh] rounded-lg shadow-2xl"
+                      />
+                      <div className="mt-3 bg-black/70 text-white p-3 rounded-lg text-sm max-w-[90%]">
+                        <div className="font-bold text-green-400 mb-1">Proportions Corrected</div>
+                        <div className="text-xs text-gray-300 mb-2">
+                          {warpCorrections.length > 0
+                            ? warpCorrections.join(' • ')
+                            : 'Proportions were already correct!'}
+                        </div>
+                        {comparisonImageBase64 && (
+                          <div className="text-xs text-yellow-300">
+                            🔴 RED = Original position | 🟢 GREEN = Corrected position
+                          </div>
+                        )}
+                      </div>
+                      {/* Apply / Discard Actions */}
+                      <div className="flex gap-4 mt-4 pointer-events-auto z-50">
+                        <button
+                          onClick={discardCorrection}
+                          className="px-6 py-2 rounded-full border border-white/30 text-white hover:bg-white/10 transition-colors"
+                        >
+                          Discard
+                        </button>
+                        <button
+                          onClick={applyCorrection}
+                          className="px-6 py-2 rounded-full bg-green-500 text-black font-bold hover:bg-green-400 transition-colors shadow-xl"
+                        >
+                          Apply Correction
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+
+                {/* Bottom Button Bar */}
+                <div className="absolute bottom-4 left-4 flex gap-2 pointer-events-none flex-wrap">
+                  <button onClick={onLockIntent} className="pointer-events-auto bg-green-500 text-black font-bold px-4 py-2 rounded-full shadow-lg hover:bg-green-400">
+                    LOCK INTENT
+                  </button>
+
+                  {/* Segment Selector */}
+                  <select
+                    value={selectedSegment}
+                    onChange={(e) => setSelectedSegment(e.target.value)}
+                    className="pointer-events-auto px-3 py-2 rounded-full bg-black/50 text-white border border-white/30 text-sm"
+                  >
+                    <option value="scooter">Scooter</option>
+                    <option value="hatchback">Hatchback</option>
+                    <option value="sedan">Sedan</option>
+                    <option value="suv">SUV</option>
+                  </select>
+
+                  {/* View Selector */}
+                  <select
+                    value={selectedView}
+                    onChange={(e) => setSelectedView(e.target.value)}
+                    className="pointer-events-auto px-3 py-2 rounded-full bg-black/50 text-white border border-white/30 text-sm"
+                  >
+                    <option value="front_3q">Front 3/4</option>
+                    <option value="rear_3q">Rear 3/4</option>
+                    <option value="side">Side</option>
+                  </select>
+
+                  {/* MENTOR SLIDER (Toolbar) */}
+                  <div className="pointer-events-auto flex items-center gap-2 bg-black/50 px-3 py-2 rounded-full border border-white/30">
+                    <span className="text-xs font-bold text-purple-300">STR: {correctionStrength}</span>
+                    <input
+                      type="range" min="0.4" max="0.8" step="0.01" value={correctionStrength}
+                      onChange={(e) => setCorrectionStrength(parseFloat(e.target.value))}
+                      className="w-20 accent-purple-500 cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Generative Sketch Correction */}
+                  <button
+                    onClick={warpSketch}
+                    disabled={isWarping}
+                    className={`pointer-events-auto px-4 py-2 rounded-full shadow-lg font-bold border transition-colors ${isWarping
+                      ? 'bg-yellow-500/50 text-black border-yellow-500 animate-pulse'
+                      : 'bg-purple-600 text-white border-purple-400 hover:bg-purple-500'
+                      }`}
+                  >
+                    {isWarping ? '🔄 Correcting...' : '✨ AI Correct'}
+                  </button>
+
+                  {/* View Corrected Result */}
+                  {warpedImageBase64 && (
+                    <button
+                      onClick={() => setShowWarpedImage(!showWarpedImage)}
+                      className={`pointer-events-auto px-4 py-2 rounded-full shadow-lg font-bold border transition-colors ${showWarpedImage
+                        ? 'bg-green-500 text-black border-green-300'
+                        : 'bg-black/50 text-white border-white/50'
+                        }`}
+                    >
+                      {showWarpedImage ? '🟢 Corrected: ON' : '⚪ View Corrected'}
+                    </button>
+                  )}
+
+                  {isDreamThinking && <span className="text-green-500 animate-pulse self-center font-mono">DREAMING...</span>}
+                </div>
+                {/* DEBUG PANEL REMOVED */}
+              </div>
+            )}
+
           </div>
 
           <div className="h-full rounded-3xl border overflow-hidden" style={{ background: 'var(--panel)', borderColor: 'var(--border)' }}>
@@ -635,7 +1009,10 @@ export default function Shell() {
                 dimensions,
                 objects: chatObjects,
                 imageUrl: (resolvedImageUrls && resolvedImageUrls[0]) || sketchUrl,
-                masterDescription,
+                warpedImageBase64,
+                warpCorrections,
+                isWarping,
+                onRequestWarp: warpSketch,
               }}
             />
           </div>

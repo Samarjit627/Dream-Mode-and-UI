@@ -1,0 +1,36 @@
+{
+    "segment": "hatchback",
+    "archetype": "sporty",
+    "view": "side",
+    "priority_weights": {
+        "wheelbase": "high",
+        "greenhouse": "high",
+        "overhangs": "medium"
+    },
+    "proportion_bands": {
+        "wheelbase_ratio": [
+            0.60,
+            0.64
+        ],
+        "body_height_to_length": [
+            0.32,
+            0.35
+        ],
+        "greenhouse_height_ratio": [
+            0.34,
+            0.38
+        ],
+        "front_overhang_ratio": [
+            0.20,
+            0.24
+        ],
+        "rear_overhang_ratio": [
+            0.22,
+            0.26
+        ],
+        "ground_clearance_ratio": [
+            0.05,
+            0.07
+        ]
+    }
+}

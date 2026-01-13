@@ -1,0 +1,28 @@
+{
+    "segment": "sedan",
+    "archetype": "balanced",
+    "view": "rear_3q",
+    "priority_weights": {
+        "rear_mass": "high",
+        "wheel_dominance": "medium",
+        "greenhouse": "low"
+    },
+    "proportion_bands": {
+        "front_wheel_scale": [
+            0.86,
+            0.90
+        ],
+        "rear_mass_width_ratio": [
+            0.56,
+            0.60
+        ],
+        "rear_mass_height_ratio": [
+            0.40,
+            0.44
+        ],
+        "ground_clearance_ratio": [
+            0.05,
+            0.07
+        ]
+    }
+}
