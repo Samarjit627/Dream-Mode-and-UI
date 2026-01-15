@@ -18,7 +18,7 @@ import os
 import json
 from typing import Dict, List, Optional, Tuple
 
-PROPORTIONS_DIR = os.path.join(os.path.dirname(__file__), "../proportions")
+PROPORTIONS_DIR = os.path.join(os.path.dirname(__file__), "proportions")
 
 class ArchetypeSelector:
     def __init__(self):
@@ -174,7 +174,7 @@ class ArchetypeSelector:
         
         return "balanced" # Default
 
-    def get_corrections(self, segment: str, view: str, observations: Dict, measurements: Optional[Dict] = None) -> List[str]:
+    def get_corrections(self, segment: str, view: str, observations: Dict, measurements: Optional[Dict] = None, perspective: Optional[Dict] = None) -> List[str]:
         """
         Main Entry Point.
         Returns list of Prompt Modifiers (e.g., "extended wheelbase").
@@ -194,6 +194,19 @@ class ArchetypeSelector:
         corrections = []
         bands = config.get("proportion_bands", {})
         
+        # 2b. Process Unconditional Modifiers (Grok Alignment)
+        # These are applied regardless of measurements to ensure style/structure.
+        json_modifiers = config.get("modifiers", [])
+        print(f"  [Logic] DEBUG: Found {len(json_modifiers)} modifiers in JSON")
+        for i, mod in enumerate(json_modifiers):
+            print(f"  [Logic] DEBUG: Modifier {i}: {mod}")
+            if mod.get("condition") == "always":
+                print(f"  [Logic] Applying Always-Modifier: {mod.get('prompt_addition')}")
+                corrections.append(mod.get("prompt_addition"))
+            else:
+                print(f"  [Logic] DEBUG: Skipping modifier (condition={mod.get('condition')})")
+
+
         # 3. Compare Measurements (If available)
         if measurements:
             for metric, val in measurements.items():
@@ -201,10 +214,6 @@ class ArchetypeSelector:
                     min_v, max_v = bands[metric]
                     if val < min_v:
                         # Violation: Too Small
-                        # Look up fix text? 
-                        # We need a Mapping of Metric -> Correction Text (User didn't strictly provide this text map in JSON?
-                        # Wait, the JSONs have bands, but NOT the 'instruction text'.
-                        # We must infer instruction: "increase {metric}"
                         corrections.append(self._get_correction_text(metric, "increase"))
                     elif val > max_v:
                         # Violation: Too Large
@@ -214,10 +223,6 @@ class ArchetypeSelector:
                         pass
         else:
             # 4. Fallback: Use Observations (Qualitative) if no CV measurements
-            # "If wheelbase feels short, extend it"
-            # This is the Hybrid Mode using the JSON priority weights as a guide?
-            # Or just strict mapping of observation -> action?
-            # Let's map observation to the JSON metric intent.
             
             # Wheelbase
             wb_feel = observations.get("wheelbase", "balanced")
@@ -233,6 +238,20 @@ class ArchetypeSelector:
             bh_feel = observations.get("body_height", "balanced")
             if bh_feel == "tall": corrections.append("lowered stance")
             elif bh_feel == "low": corrections.append("raised body height")
+
+        # 5. Perspective Corrections (V2 Strict Mode)
+        # New logic to handle perspective failures from Stage 1
+        if perspective:
+            # Rear Compression
+            rear_comp = perspective.get("rear_compression")
+            if rear_comp == "insufficient":
+                 corrections.append("force perspective convergence")
+                 corrections.append("wider rear track")
+                 
+            # Character Lines
+            char_lines = perspective.get("character_line_behavior")
+            if char_lines == "parallel": # Should converge in 3/4 view
+                 corrections.append("converging character lines")
 
         return corrections
 

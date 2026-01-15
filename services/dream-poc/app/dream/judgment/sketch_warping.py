@@ -33,36 +33,73 @@ XAI_API_KEY = os.getenv("XAI_API_KEY")
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
 
 # Clients
+xai_client = None
+sdxl_pipe = None
+
 try:
-    xai_client = OpenAI(
-        api_key=XAI_API_KEY,
-        base_url="https://api.x.ai/v1"
-    ) if XAI_API_KEY else None
+    if XAI_API_KEY:
+        xai_client = OpenAI(
+            api_key=XAI_API_KEY,
+            base_url="https://api.x.ai/v1"
+        )
     
-    print("  [Init] Loading SDXL Turbo pipeline (diffusers)...")
-    # Use diffusers library locally - most reliable approach
-    # This runs SDXL Turbo directly on the server
+    # Lazy Load Strategy to prevent startup crashes
+    pass
+except Exception as e:
+    print(f"  [Init Error] Failed to init standard clients: {e}")
+
+def get_sdxl_pipe():
+    """Singleton accessor for SDXL Turbo Pipe"""
+    global sdxl_pipe
+    if sdxl_pipe is not None:
+        return sdxl_pipe
+        
+    print("  [LazyInit] Loading SDXL Turbo...")
     try:
         from diffusers import AutoPipelineForImage2Image
         import torch
         
-        sdxl_pipe = AutoPipelineForImage2Image.from_pretrained(
+        device = "cpu"
+        variant = None
+        dtype = torch.float32
+        
+        if torch.backends.mps.is_available():
+            device = "mps"
+            dtype = torch.float16
+            variant = "fp16"
+            print("  [LazyInit] Detected Apple Silicon (MPS). Enabling GPU acceleration.")
+        elif torch.cuda.is_available():
+             device = "cuda"
+             dtype = torch.float16
+             variant = "fp16"
+             print("  [LazyInit] Detected Nvidia CUDA. Enabling GPU acceleration.")
+        else:
+             print("  [LazyInit] No GPU detected. Using CPU with Low-RAM offloading.")
+
+        pipe = AutoPipelineForImage2Image.from_pretrained(
             "stabilityai/sdxl-turbo",
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            variant="fp16" if torch.cuda.is_available() else None
+            torch_dtype=dtype,
+            variant=variant
         )
         
-        # Move to GPU if available, otherwise CPU
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        sdxl_pipe = sdxl_pipe.to(device)
-        print(f"  [Init] ✓ SDXL Turbo loaded on {device}")
-    except Exception as pipe_err:
-        print(f"  [Init] ✗ SDXL Turbo pipeline failed: {pipe_err}")
-        sdxl_pipe = None
-    
-except Exception as e:
-    print(f"  [Init] General client init error: {e}")
-    xai_client = None
+        if device == "cpu":
+             pipe.enable_model_cpu_offload()
+        else:
+             pipe = pipe.to(device)
+             
+        sdxl_pipe = pipe
+        print(f"  [LazyInit] ✓ SDXL Turbo loaded (Device: {device}, Dtype: {dtype})")
+        return sdxl_pipe
+    except Exception as e:
+        print(f"  [LazyInit] ✗ SDXL Turbo failed: {e}")
+        try:
+            from app.processing import log_trace
+            log_trace(f"SDXL LOAD ERROR: {e}")
+            import traceback
+            log_trace(traceback.format_exc())
+        except:
+            pass
+        return None
 
 
 class CorrectionResponse(BaseModel):
@@ -117,44 +154,54 @@ def analyze_with_grok(image_base64: str, segment: str) -> dict:
         
     print("  [Stage 1: Analyst] Observing sketch geometry...")
     
-    system_prompt = """You are a senior automotive design analyst.
+    # STAGE 1: ANALYST (Grok Vision · Geometry & Intent Extraction)
+    system_prompt = """You are a senior automotive design analyst focused on maximal truthfulness.
 
-Your role is to OBSERVE and EXTRACT STRUCTURE.
-You do NOT redesign, improve, or correct anything.
+Your role is to OBSERVE and EXTRACT STRUCTURE from the uploaded sketch image.
+You do NOT redesign, improve, or correct anything. Base all observations solely on visible elements in the image.
 
 Analyze the uploaded sketch and output ONLY factual, observable information about geometry, proportion feel, and intent.
 
 Your responsibilities:
 
 1. Vehicle classification
-   - Identify the vehicle segment (e.g. hatchback, sedan, SUV, coupe).
-   - Identify the view (side, front_3q, rear_3q).
+   - Identify the vehicle segment (e.g., hatchback, sedan, SUV).
+   - Identify the view (side, front three-quarter, rear three-quarter).
 
 2. Geometric anchor detection (descriptive, not numeric guessing)
    - Presence and relative position of:
      • front wheel
      • rear wheel
+     • ground plane
+     • roof peak
      • beltline
+   - Wheel size relationship (rear vs front): smaller / similar / larger.
 
 3. Qualitative proportion assessment
    - Wheelbase feels: short / balanced / long
    - Body height feels: tall / balanced / low
    - Greenhouse feels: heavy / balanced / light
+   - Rear mass feels: heavy / balanced / light
 
-4. STYLE & INTENT (NEW):
-   - Extract 3 distinct style keywords (e.g., "minimalist", "angular", "organic", "aggressive", "sketchy", "precise").
-   - Keep it to single adjectives.
+4. Perspective discipline
+   - Rear compression: sufficient / insufficient
+   - Character line behavior: converging / parallel
 
 STRICT RULES:
 - Do NOT propose fixes.
 - Do NOT suggest improvements.
 - Do NOT invent numbers or ratios.
-- Do NOT describe materials or brand.
-- Use precise, restrained language.
+- Do NOT describe style, aesthetics, rendering, materials, or brand.
+- Use precise, restrained language. If any element is unclear in the image, note it as 'undetectable'.
 
-Output in structured JSON format only."""
+Output in structured JSON format only. No additional text.
+"""
 
     try:
+        if xai_client is None:
+             print("  [Stage 1] xAI Client not initialized (Missing API Key). Skipping analysis.")
+             return {}
+             
         response = xai_client.chat.completions.create(
             model="grok-2-vision-1212",
             messages=[
@@ -168,22 +215,39 @@ Output in structured JSON format only."""
                         },
                         {
                             "type": "text",
-                            "text": f"Analyze this {segment} sketch. Output structured JSON with: segment, view, style_keywords, proportion_feel."
+                            "text": f"Analyze this {segment} sketch. Output structured JSON with: segment, view, anchors, proportion_feel, perspective."
                         }
                     ]
                 }
             ],
             response_format={"type": "json_object"},
-            max_tokens=300,
-            temperature=0.1  # Low temperature for factual observation
+            max_tokens=500,
+            temperature=0.0  # Zero temperature for factual observation
         )
         
         content = response.choices[0].message.content
         print(f"  [Stage 1: Raw Output] {content}")
         
+        # Strip markdown if present
+        if "```json" in content:
+            content = content.replace("```json", "").replace("```", "")
+        elif "```" in content:
+            content = content.replace("```", "")
+        
         try:
-            return json.loads(content)
+            data = json.loads(content)
+            
+            # Normalize Schema (Handle Grok Variations)
+            if "geometric_anchors" in data:
+                data["anchors"] = data.pop("geometric_anchors")
+            if "perspective_discipline" in data:
+                data["perspective"] = data.pop("perspective_discipline")
+            if "qualitative_proportion_assessment" in data:
+                data["proportion_feel"] = data.pop("qualitative_proportion_assessment")
+                
+            return data
         except json.JSONDecodeError:
+            print("  [Stage 1: JSON Decode Error] Failed to parse Grok output.")
             return {}
         
     except Exception as e:
@@ -199,13 +263,10 @@ def correct_sketch(image_base64: str, segment: str = "hatchback", view: str = "f
 
     original_full_base64 = image_base64 if image_base64.startswith("data:") else f"data:image/png;base64,{image_base64}"
     
-    # ... (rest of function until strength calculation)
-    
     # 1. STAGE 1: Analyze with Grok (Structured Observation)
     analysis = analyze_with_grok(original_full_base64, segment)
     
     # Extract key observations
-    # Extract key observations, defaulting to UI inputs if AI is unsure/fails
     observed_segment = analysis.get("segment")
     if not observed_segment or observed_segment == "unknown":
         observed_segment = segment
@@ -215,30 +276,25 @@ def correct_sketch(image_base64: str, segment: str = "hatchback", view: str = "f
         observed_view = view
     
     proportion_feel = analysis.get("proportion_feel", {})
-    style_keywords = analysis.get("style_keywords", [])
+    anchors = analysis.get("anchors", {})
+    perspective = analysis.get("perspective", {})
     
     print(f"  [Stage 1: Observations]")
     print(f"    Segment: {observed_segment}")
     print(f"    View: {observed_view}")
-    print(f"    Style: {style_keywords}")
+    print(f"    Anchors: {anchors}")
     print(f"    Proportions: {proportion_feel}")
+    print(f"    Perspective: {perspective}")
     
     # 2. STAGE 2: LOGIC LAYER (Archetype Selector + CV Measurement)
-    # Replaces hardcoded prompt logic with data-driven guardrails
     from .archetype_selector import ArchetypeSelector
     from .cv_geometry_extraction import extract_primitives_cv
     
     selector = ArchetypeSelector()
     
     # A. Get Measurements (Physical Proof)
-    # We call the CV module to get actual geometry points
-    # Passing the base64 image directly
     try:
         print("  [Stage 2: Measurement] Extracting geometry...")
-        # Need to know image size for CV extraction? The function decodes base64 itself.
-        # But `extract_primitives_cv` wants width/height arguments?
-        # Let's check signature: def extract_primitives_cv(image_base64: str, image_width: int, image_height: int) -> Dict:
-        # We need to get size first.
         pil_img = decode_base64_to_image(original_full_base64)
         w, h = pil_img.size
         
@@ -251,41 +307,75 @@ def correct_sketch(image_base64: str, segment: str = "hatchback", view: str = "f
         
     except Exception as e:
         print(f"  [Stage 2: Measurement Error] {e}")
-        measurements = None  # Fallback to pure qualitative
+        measurements = None
     
     # B. Generate Corrections (The Decision)
     correction_modifiers = selector.get_corrections(
         segment=observed_segment, 
         view=observed_view, 
-        observations=proportion_feel,
-        measurements=measurements
+        observations=proportion_feel, # Archetype logic still needs this for now
+        measurements=measurements,
+        perspective=perspective # Pass perspective data to logic
     )
     
     print(f"  [Stage 2: Logic] Modifiers: {correction_modifiers}")
 
-    # Build constraint-aware prompt
+    # 3. STAGE 3: ARTIST (SDXL Turbo · Constrained Reconstruction)
+    # Translate Text Instructions to SDXL Constraints
+    
+    # STAGE 3: ARTIST (SDXL Turbo · Constrained Reconstruction)
+    # Using "Lean Tape Drawing" style as per Grok V10 specifications.
+    # MAXIMUM Design Preservation - Explicit pixel-level instructions
+    design_preservation = (
+        "COPY EXACT DESIGN: headlights EXACTLY as drawn, grille EXACTLY as drawn, mirrors EXACTLY as drawn, "
+        "door handles EXACTLY as drawn, character lines EXACTLY as drawn, body surfacing EXACTLY as drawn, "
+        "window shape EXACTLY as drawn, all styling details EXACTLY as original sketch. "
+        "ONLY move pixels to fix proportions, DO NOT redesign ANY features, DO NOT change ANY styling, "
+        "DO NOT add details, DO NOT modify shapes, DO NOT invent features. "
+    )
+    
+    stroke_preservation = (
+        "PRESERVE EXACT LINE CHARACTER: Keep every line variation, every pressure change, every sketchy overlap, "
+        "every construction line, every hand-drawn imperfection EXACTLY as original. "
+        "DO NOT clean, DO NOT consolidate, DO NOT thicken, DO NOT smooth, DO NOT vectorize. "
+    )
+    
+    base_positive_prompt = (
+        "Adjust ONLY wheelbase length, ONLY wheel size, ONLY greenhouse height for proportion correction. "
+        "Everything else stays EXACTLY as original sketch. "
+        "Automotive design sketch, hand-drawn pen on white paper. "
+    )
+    
     prompt_parts = [
-        f"Professional automotive sketch of a {observed_segment}",
-        f"viewed from {observed_view.replace('_', ' ')}",
+        design_preservation,  # CRITICAL: Design intent FIRST
+        stroke_preservation,  # Then stroke preservation
+        base_positive_prompt,
+        f"Automotive sketch of a {observed_segment}",
+        f"viewed from {observed_view}"
     ]
     
-    # Inject Style Keywords (Design Intent Preservation)
-    if style_keywords:
-        style_desc = ", ".join(style_keywords)
-        prompt_parts.append(f"style: {style_desc}")
-        
-    prompt_parts.append("with corrected proportions:")
-    
-    # Add the Logic Layer's strict corrections
     if correction_modifiers:
         prompt_parts.extend(correction_modifiers)
-    else:
-        prompt_parts.append("balanced proportions")
-    
-    # REMOVED: "minimalistic hand-drawn style" to prevent style overwrite
-    prompt_parts.append("Clean black lines on white paper.")
     
     sdxl_prompt = ", ".join(prompt_parts)
+    
+    # MAXIMUM Anti-redesign negative prompts
+    negative_prompt_parts = [
+        # Explicit anti-redesign (CRITICAL)
+        "redesign", "new design", "different design", "changed design", "modified design",
+        "new headlights", "different headlights", "changed headlights",
+        "new grille", "different grille", "changed grille",
+        "new mirrors", "different mirrors", "new door handles",
+        "new character lines", "different body surfacing", "new styling",
+        "added details", "modified features", "invented features", "new features",
+        # Anti-cleaning
+        "clean lines", "uniform thickness", "vector art", "polished", "smoothed", "consolidated",
+        # Standard negatives
+        "photorealistic", "shading", "color", "3d render", "gradient", "shadows",
+        "extra wheels", "bad anatomy", "broken lines", "messy", "blurry",
+        "text", "labels", "watermark", "signature"
+    ]
+    sdxl_negative_prompt = ", ".join(negative_prompt_parts)
     
     temp_path = None
     try:
@@ -293,67 +383,63 @@ def correct_sketch(image_base64: str, segment: str = "hatchback", view: str = "f
         original_image = decode_base64_to_image(image_base64)
         width, height = original_image.size
         
-        # Optimization: Resize if too large to prevent timeouts on CPU
+        # Optimization: Resize if too large
         max_side = 1024
         if width > max_side or height > max_side:
             ratio = min(max_side / width, max_side / height)
             new_width = int(width * ratio)
             new_height = int(height * ratio)
             original_image = original_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            print(f"  [Optimization] Resized input from {width}x{height} to {new_width}x{new_height}")
             width, height = new_width, new_height
 
         max_dim = max(width, height)
         
         # Create square canvas
         square_img = Image.new('RGB', (max_dim, max_dim), (255, 255, 255))
-        # Center original image
         offset_x = (max_dim - width) // 2
         offset_y = (max_dim - height) // 2
         square_img.paste(original_image, (offset_x, offset_y))
         
-        # Save temp file for Gradio
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
             square_img.save(f, format="PNG")
             temp_path = f.name
             
-        
-        
-        
-        print(f"  [SDXL Turbo] Running Img2Img with local pipeline...")
-        print(f"  [Prompt] {sdxl_prompt}")
+        print(f"  [SDXL Turbo] Running Img2Img...")
+        print(f"  [Positive] {sdxl_prompt}")
+        print(f"  [Negative] {sdxl_negative_prompt}")
 
-        # Validate pipeline is available
-        if sdxl_pipe is None:
-            raise Exception("SDXL Turbo pipeline is not loaded.")
+        pipe = get_sdxl_pipe()
+        if pipe is None:
+            raise Exception("SDXL Turbo pipeline could not be loaded.")
         
-        # Load the square image for processing
         init_image = Image.open(temp_path)
         
-        # Run SDXL Turbo img2img
-        print(f"  [SDXL Turbo] Generating with local pipeline...")
-        # Logic-Driven Dynamic Strength
-        # If the Logic Layer requested strict changes (modifiers exist), we boost strength to force the warp.
-        # If no modifiers (Balanced/Safe), we use lower strength to just clean/denoise.
-        
+        # ABSOLUTE MINIMUM strength - final attempt before geometric warping
         if strength_override is not None:
-             # MENTOR MODE: User overrides the logic
-             dynamic_strength = float(strength_override)
-             print(f"  [SDXL Turbo] Strength Override: {dynamic_strength} (User Control)")
+             final_strength = float(strength_override)
+             print(f"  [SDXL Turbo] Strength Override: {final_strength}")
         else:
-             # AUTO MODE: "Golden Ratio" logic
-             # TUNING: Adjusted to 0.665 per user request (The "Golden Ratio" of stability vs correction)
-             dynamic_strength = 0.665 if correction_modifiers else 0.55
+             base_strength = 0.40  # Absolute minimum for any visible changes
              
-        print(f"  [SDXL Turbo] Final Strength: {dynamic_strength} (Modifiers: {len(correction_modifiers)})")
+             if len(correction_modifiers) > 4:
+                 base_strength = 0.45
+             elif len(correction_modifiers) < 2:
+                 base_strength = 0.38
+                 
+             final_strength = base_strength
+             print(f"  [Stage 3] Final Strength: {final_strength} (Absolute Minimum)\")")
         
-        output_square = sdxl_pipe(
+        print(f"  [SDXL Turbo] Running generation...")
+        print(f"  [Positive] {sdxl_prompt}")
+        print(f"  [Negative] {sdxl_negative_prompt}")
+        
+        output_square = pipe(
             prompt=sdxl_prompt,
-            negative_prompt="photorealistic, shading, color, 3d render, extra wheels, bad anatomy, distorted, messy, blurry",
+            negative_prompt=sdxl_negative_prompt,
             image=init_image,
-            num_inference_steps=3,  # Turbo uses very few steps
-            strength=dynamic_strength,
-            guidance_scale=0.0,     # Turbo doesn't use guidance
+            num_inference_steps=4,  # Minimum for SDXL Turbo
+            strength=final_strength,  # Absolute minimum: 0.38-0.45
+            guidance_scale=1.0,  # Minimal guidance
         ).images[0]
         
         print("  [SDXL Turbo] Success!")
@@ -382,15 +468,25 @@ def correct_sketch(image_base64: str, segment: str = "hatchback", view: str = "f
             success=True,
             corrected_image_base64=corrected_base64,
             original_image_base64=original_full_base64,
-            corrections=["Proportions corrected via SDXL Turbo (HF Inference API)"],
-            explanation="Sketch proportions improved using SDXL Turbo Img2Img via Hugging Face Inference API.",
+            corrections=correction_modifiers if correction_modifiers else ["Proportions corrected (Balanced)"],
+            analysis=analysis,  # Pass V2 Data
+            explanation="Sketch proportions aligned to V2 Strict Logic.",
             message="Sketch corrected"
         )
 
     except Exception as e:
-        print(f"  [Img2Img Error] {e}")
+        error_msg = f"  [Img2Img Error] {e}"
+        print(error_msg)
+        
+        # Log to debug file for Agent visibility
+        with open("/Users/samarjit/.gemini/antigravity/scratch/dream-mode-repo/services/dream-poc/debug_error.log", "w") as f:
+             f.write(error_msg + "\n")
+             import traceback
+             traceback.print_exc(file=f)
+             
         if temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
+            
         import traceback
         traceback.print_exc()
         return CorrectionResponse(

@@ -15,9 +15,10 @@ class RuleResult(BaseModel):
     question: Optional[str] = None
 
 class ActiveGhostLayer(BaseModel):
-    type: str
-    elements: List[dict]
+    type: Optional[str] = None
+    elements: Optional[List[dict]] = None
     lines: Optional[List[dict]] = None
+    status: Optional[str] = None  # Allow status-only objects
 
 class JudgmentResponse(BaseModel):
     results: List[RuleResult]
@@ -43,57 +44,47 @@ def judge_design(image_base64: str) -> JudgmentResponse:
     # 2. Prepare Rules Text
     rules_text = "\n".join([f"{r.id}: {r.name} - {r.monitor_instruction}" for r in DJKB_RULES_V1])
 
-    system_prompt = f"""You are the 'Dream Discipline Engine', a senior industrial design judgment system.
-Your goal is to evaluate a sketch against specific design rules with extreme restraint and precision.
+    system_prompt = f"""You are the Design Discipline Engine, committed to maximal truthfulness.
 
-QA PRINCIPLES:
-1. Be CONCISE. Summary max 3 sentences.
-2. If geometry is ambiguous, ask a meaning-based question. Do NOT guess.
-3. If symmetry is broken, ask if it is intentional.
+Your role is to VERIFY proportion discipline in the generated sketch against the original.
+You do NOT redesign, suggest, or improve.
 
-4. GHOST LAYER GENERATION (MANDATORY):
-   - If ANY rule fails (Mass, Structure, etc.), you MUST generate an "active_ghost_layer".
-   - Do NOT be hesitant. If there is a problem, visualize it.
-   - Priority: Structural > Visual Mass > Symmetry > Hierarchy.
-   - Coordinates:
-     - x, y: PERCENTAGE (0-100) of the image width/height. (e.g. x=50, y=50 is center).
-     - r: PERCENTAGE (0-100) radius relative to image width.
-   - Types:
-     - "lines": For structural corrections. [points=[{{x,y}}...], color, width].
-     - "mass": For proportion issues. Soft blobs [{{x, y, r, opacity=0.4}}].
-     - "structure": For weak connections. [{{x, y, r, opacity=0.5}}].
-     - "symmetry": For axis.
-   - Output format examples:
-     "active_ghost_layer": {{
-       "type": "lines",
-       "lines": [
-         {{ "points": [{{"x": 10, "y": 10}}, {{"x": 100, "y": 100}}], "color": "#00ff00", "width": 3 }}
-       ],
-       "elements": []
-     }}
-     OR
-     "active_ghost_layer": {{
-       "type": "mass",
-       "elements": [
-         {{ "shape": "blob", "x": 50, "y": 50, "r": 30, "opacity": 0.4 }}
-       ]
-     }}
+Evaluate the GENERATED sketch against the following categories ONLY:
 
-YOUR TASK:
-1. Evaluate the design against the following RULES.
-2. For each rule, determine status (pass/fail/warn).
-3. Generate active_ghost_layer for the most critical failure (prefer vector lines for structure).
+1. Wheel dominance & stance
+2. Wheelbase perception
+3. Vertical mass balance
+4. Rear mass quietness
+5. Perspective discipline
 
-Rules to Evaluate:
+For EACH category:
+- Mark PASS or FAIL
+- If FAIL, explain in ONE sentence based solely on observable differences.
+- Assign severity: low / medium / high
+
+ACTIVE_GHOST_LAYER RULE:
+- Generate an active_ghost_layer ONLY if:
+  • severity is HIGH
+  • and the failure affects overall proportion reading
+
+STRICT RULES:
+- Do NOT praise the sketch.
+- Do NOT suggest stylistic changes.
+- Do NOT introduce new proportion rules.
+- Be minimal, factual, and strict. If verification is impossible due to image issues, mark all as 'UNVERIFIABLE'.
+
+Rules to Evaluate (Reference):
 {rules_text}
 
-OUTPUT FORMAT (JSON ONLY):
+Output structured JSON only:
 {{
-  "summary": "Concise critique (max 3 sentences).",
+  "wheel_dominance": {{ "status": "PASS" }},
+  "wheelbase": {{ "status": "FAIL", "severity": "high", "reason": "..." }},
+  "vertical_mass": {{ ... }},
+  "rear_mass": {{ ... }},
+  "perspective": {{ ... }},
   "active_ghost_layer": {{ ... }},
-  "results": [
-    {{ "rule_id": "rule_name", "status": "pass/fail/warn", "reasoning": "Why it passed/failed", "question": "Optional clarification" }}
-  ]
+  "summary": "One sentence summary."
 }}
 """
     

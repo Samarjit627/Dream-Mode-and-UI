@@ -31,3 +31,4 @@ scikit-image
 diffusers
 transformers
 accelerate
+controlnet_aux

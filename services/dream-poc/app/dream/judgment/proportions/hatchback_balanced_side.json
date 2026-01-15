@@ -1,0 +1,88 @@
+{
+    "segment": "hatchback",
+    "view": "side",
+    "archetype": "balanced",
+    "grok_alignment": true,
+    "automotive_standards": {
+        "source": "Professional automotive design standards (Grok V10) - Side View",
+        "wheelbase_to_wheel_diameter": [
+            2.6,
+            3.0
+        ],
+        "wheel_to_body_height": [
+            0.25,
+            0.30
+        ],
+        "body_height_to_wheel": [
+            1.8,
+            2.2
+        ],
+        "greenhouse_to_height": [
+            0.40,
+            0.50
+        ],
+        "front_overhang_to_wheel": [
+            0.9,
+            1.1
+        ],
+        "rear_overhang_to_wheel": [
+            0.7,
+            1.2
+        ]
+    },
+    "description": "Balanced Hatchback (Side View) - Wheelbase: 2.6-3.0× wheel diameter, Height: 1.8-2.2× wheel diameter, Greenhouse: 40-50% of height. Emphasis on balanced proportions and clean lines.",
+    "proportion_bands": {
+        "wheelbase_ratio": [
+            2.6,
+            3.0
+        ],
+        "wheel_to_body_height_ratio": [
+            0.25,
+            0.30
+        ],
+        "body_height_to_wheel_ratio": [
+            1.8,
+            2.2
+        ],
+        "greenhouse_height_ratio": [
+            0.40,
+            0.50
+        ]
+    },
+    "modifiers": [
+        {
+            "condition": "always",
+            "prompt_addition": "clean defined wheel arches, wheels 25-30% of body height",
+            "weight": 1.2
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "wheelbase 2.6-3.0 wheel diameters, balanced stance",
+            "weight": 1.2
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "taut surface language, strong shoulder line",
+            "weight": 1.1
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "greenhouse 40-50% of height, proper cabin proportions",
+            "weight": 1.1
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "converging character lines, dynamic flow",
+            "weight": 1.0
+        },
+        {
+            "condition": "proportion_feel.wheelbase == short",
+            "prompt_addition": "extended wheelbase to standard 2.6-3.0 range",
+            "strength_boost": 0.10
+        }
+    ],
+    "constraints": {
+        "ground_plane": "fixed",
+        "front_wheel": "fixed_anchor"
+    }
+}

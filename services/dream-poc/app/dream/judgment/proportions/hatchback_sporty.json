@@ -1,0 +1,87 @@
+{
+    "segment": "hatchback",
+    "view": "front_3q",
+    "archetype": "sporty",
+    "grok_alignment": true,
+    "automotive_standards": {
+        "source": "Professional automotive design standards (Grok V10) - Sporty/Aggressive",
+        "wheelbase_to_wheel_diameter": [
+            2.5,
+            2.8
+        ],
+        "wheel_to_body_height": [
+            0.28,
+            0.35
+        ],
+        "visible_wheelbase_3q": [
+            2.2,
+            2.6
+        ],
+        "greenhouse_to_height": [
+            0.35,
+            0.45
+        ],
+        "front_overhang_to_wheel": [
+            0.5,
+            0.8
+        ]
+    },
+    "description": "Sporty/Aggressive Hatchback (Front 3/4 View) - Shorter wheelbase (2.5-2.8×), larger wheels (28-35% height), lower greenhouse (35-45%), minimal overhangs for dynamic stance.",
+    "proportion_bands": {
+        "wheelbase_ratio": [
+            2.5,
+            2.8
+        ],
+        "wheel_to_body_height_ratio": [
+            0.28,
+            0.35
+        ],
+        "rear_wheel_scale": [
+            0.90,
+            1.0
+        ],
+        "greenhouse_height_ratio": [
+            0.35,
+            0.45
+        ]
+    },
+    "modifiers": [
+        {
+            "condition": "always",
+            "prompt_addition": "extended wheelbase, dynamic forward stance",
+            "weight": 1.3
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "oversized wheels 28-35% of height, strong wheel dominance",
+            "weight": 1.4
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "low chopped greenhouse 35-45% height, aggressive roofline",
+            "weight": 1.2
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "converging perspective lines, dynamic gesture, proper three-quarter view",
+            "negative_addition": "parallel lines, flat perspective",
+            "weight": 1.2
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "minimal front overhang, wheels at corners stance",
+            "weight": 1.2
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "clean defined wheel arches, taut surface language",
+            "weight": 1.1
+        }
+    ],
+    "constraints": {
+        "ground_plane": "fixed",
+        "front_wheel": "fixed_anchor",
+        "perspective_type": "two_point",
+        "stance": "aggressive_forward"
+    }
+}

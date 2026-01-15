@@ -1,0 +1,86 @@
+{
+    "segment": "hatchback",
+    "view": "front_3q",
+    "archetype": "balanced",
+    "grok_alignment": true,
+    "automotive_standards": {
+        "source": "Professional automotive design standards (Grok V10)",
+        "wheelbase_to_wheel_diameter": [
+            2.6,
+            3.0
+        ],
+        "wheel_to_body_height": [
+            0.25,
+            0.30
+        ],
+        "visible_wheelbase_3q": [
+            2.3,
+            2.8
+        ],
+        "greenhouse_to_height": [
+            0.40,
+            0.50
+        ],
+        "front_overhang_to_wheel": [
+            0.6,
+            1.0
+        ]
+    },
+    "description": "Balanced Hatchback (Front 3/4 View) - Professional automotive proportion standards. Wheelbase: 2.6-3.0× wheel diameter, Wheels: 25-30% of height, Greenhouse: 40-50% of height.",
+    "proportion_bands": {
+        "wheelbase_ratio": [
+            2.6,
+            3.0
+        ],
+        "wheel_to_body_height_ratio": [
+            0.25,
+            0.30
+        ],
+        "rear_wheel_scale": [
+            0.85,
+            0.95
+        ],
+        "greenhouse_height_ratio": [
+            0.40,
+            0.50
+        ]
+    },
+    "modifiers": [
+        {
+            "condition": "always",
+            "prompt_addition": "proper three-quarter perspective, converging lines toward vanishing point",
+            "weight": 1.3
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "front wheel correct ellipse perspective, proper foreshortening angle",
+            "weight": 1.3
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "wheels 25-30% of body height, strong wheel dominance",
+            "weight": 1.3
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "wheelbase 2.6-3.0 wheel diameters, balanced stance",
+            "weight": 1.2
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "greenhouse 40-50% of height, clean cabin proportions",
+            "weight": 1.1
+        },
+        {
+            "condition": "always",
+            "prompt_addition": "strong shoulder line, defined wheel arches",
+            "weight": 1.1
+        }
+    ],
+    "constraints": {
+        "ground_plane": "fixed",
+        "front_wheel": "fixed_anchor",
+        "perspective_type": "two_point",
+        "horizon_line": "consistent"
+    }
+}
